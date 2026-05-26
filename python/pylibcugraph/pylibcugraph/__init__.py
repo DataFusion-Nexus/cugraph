@@ -36,7 +36,7 @@ from pylibcugraph.hits import hits
 
 from pylibcugraph.node2vec_random_walks import node2vec_random_walks
 
-from pylibcugraph.bfs import bfs
+from pylibcugraph.bfs import bfs, bfs_with_predicates
 
 from pylibcugraph.homogeneous_uniform_neighbor_sample import (
     homogeneous_uniform_neighbor_sample,

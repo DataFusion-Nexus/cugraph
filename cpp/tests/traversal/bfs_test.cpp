@@ -14,7 +14,9 @@
 #include <cugraph/graph_functions.hpp>
 #include <cugraph/graph_view.hpp>
 #include <cugraph/utilities/high_res_timer.hpp>
+#include <cugraph/utilities/packed_bool_utils.hpp>
 
+#include <raft/core/device_span.hpp>
 #include <raft/core/handle.hpp>
 #include <raft/util/cudart_utils.hpp>
 
@@ -27,6 +29,8 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <numeric>
+#include <optional>
 #include <vector>
 
 template <typename vertex_t, typename edge_t>
@@ -68,6 +72,252 @@ void bfs_reference(edge_t const* offsets,
 
   return;
 }
+
+namespace {
+
+template <typename T>
+rmm::device_uvector<T> to_device(raft::handle_t const& handle, std::vector<T> const& h_v)
+{
+  rmm::device_uvector<T> d_v(h_v.size(), handle.get_stream());
+  raft::update_device(d_v.data(), h_v.data(), h_v.size(), handle.get_stream());
+  return d_v;
+}
+
+template <typename vertex_t, typename KeepVertex>
+rmm::device_uvector<uint32_t> make_local_vertex_bitmap(raft::handle_t const& handle,
+                                                       vertex_t vertex_first,
+                                                       vertex_t vertex_last,
+                                                       KeepVertex keep_vertex)
+{
+  auto const num_vertices = static_cast<size_t>(vertex_last - vertex_first);
+  std::vector<uint32_t> h_bitmap(cugraph::packed_bool_size(num_vertices),
+                                 cugraph::packed_bool_empty_mask());
+  for (size_t i = 0; i < num_vertices; ++i) {
+    auto const v = vertex_first + static_cast<vertex_t>(i);
+    if (keep_vertex(v)) {
+      h_bitmap[cugraph::packed_bool_offset(i)] |= cugraph::packed_bool_mask(i);
+    }
+  }
+  return to_device(handle, h_bitmap);
+}
+
+template <typename GraphViewType, typename KeepEdge>
+cugraph::edge_property_t<typename GraphViewType::edge_type, bool> make_edge_mask(
+  raft::handle_t const& handle, GraphViewType const& graph_view, KeepEdge keep_edge)
+{
+  using vertex_t = typename GraphViewType::vertex_type;
+  using edge_t   = typename GraphViewType::edge_type;
+
+  cugraph::edge_property_t<edge_t, bool> edge_mask(handle, graph_view);
+  auto edge_mask_view = edge_mask.mutable_view();
+  for (size_t i = 0; i < graph_view.number_of_local_edge_partitions(); ++i) {
+    auto edge_partition = graph_view.local_edge_partition_view(i);
+    auto h_offsets      = cugraph::test::to_host(handle, edge_partition.offsets());
+    auto h_indices      = cugraph::test::to_host(handle, edge_partition.indices());
+    std::vector<uint32_t> h_bitmap(cugraph::packed_bool_size(h_indices.size()),
+                                   cugraph::packed_bool_empty_mask());
+    auto const major_first = edge_partition.major_range_first();
+    for (vertex_t major = edge_partition.major_range_first();
+         major < edge_partition.major_range_last();
+         ++major) {
+      auto const major_offset = static_cast<size_t>(major - major_first);
+      for (auto edge_offset = h_offsets[major_offset]; edge_offset < h_offsets[major_offset + 1];
+           ++edge_offset) {
+        if (keep_edge(major, h_indices[edge_offset])) {
+          h_bitmap[cugraph::packed_bool_offset(edge_offset)] |=
+            cugraph::packed_bool_mask(edge_offset);
+        }
+      }
+    }
+    raft::update_device(
+      edge_mask_view.value_firsts()[i], h_bitmap.data(), h_bitmap.size(), handle.get_stream());
+  }
+
+  return edge_mask;
+}
+
+template <typename vertex_t, typename edge_t>
+cugraph::graph_t<vertex_t, edge_t, false, false> make_sg_graph(raft::handle_t const& handle,
+                                                               std::vector<vertex_t> const& h_srcs,
+                                                               std::vector<vertex_t> const& h_dsts,
+                                                               vertex_t num_vertices,
+                                                               bool is_symmetric)
+{
+  std::vector<vertex_t> h_vertices(num_vertices);
+  std::iota(h_vertices.begin(), h_vertices.end(), vertex_t{0});
+
+  auto d_vertices = to_device(handle, h_vertices);
+  auto d_srcs     = to_device(handle, h_srcs);
+  auto d_dsts     = to_device(handle, h_dsts);
+
+  cugraph::graph_t<vertex_t, edge_t, false, false> graph(handle);
+  std::tie(graph, std::ignore, std::ignore) =
+    cugraph::create_graph_from_edgelist<vertex_t, edge_t, false, false>(
+      handle,
+      std::make_optional<rmm::device_uvector<vertex_t>>(std::move(d_vertices)),
+      std::move(d_srcs),
+      std::move(d_dsts),
+      std::vector<cugraph::arithmetic_device_uvector_t>{},
+      cugraph::graph_properties_t{is_symmetric, false},
+      false);
+  return graph;
+}
+
+template <typename vertex_t>
+void expect_distances(raft::handle_t const& handle,
+                      rmm::device_uvector<vertex_t> const& d_distances,
+                      std::vector<vertex_t> const& expected)
+{
+  auto h_distances = cugraph::test::to_host(handle, d_distances);
+  ASSERT_EQ(h_distances.size(), expected.size());
+  EXPECT_TRUE(std::equal(h_distances.begin(), h_distances.end(), expected.begin()));
+}
+
+template <typename vertex_t, typename edge_t>
+void run_sg_edge_mask_test(bool direction_optimizing)
+{
+  raft::handle_t handle{};
+  auto graph      = direction_optimizing
+                      ? make_sg_graph<vertex_t, edge_t>(handle,
+                                                   std::vector<vertex_t>{0, 1, 0, 2, 1, 3, 2, 3},
+                                                   std::vector<vertex_t>{1, 0, 2, 0, 3, 1, 3, 2},
+                                                   vertex_t{4},
+                                                   true)
+                      : make_sg_graph<vertex_t, edge_t>(handle,
+                                                   std::vector<vertex_t>{0, 0, 1, 2},
+                                                   std::vector<vertex_t>{1, 2, 3, 3},
+                                                   vertex_t{4},
+                                                   false);
+  auto graph_view = graph.view();
+
+  auto edge_mask = make_edge_mask(handle, graph_view, [](vertex_t src, vertex_t dst) {
+    return !(((src == vertex_t{0}) && (dst == vertex_t{1})) ||
+             ((src == vertex_t{1}) && (dst == vertex_t{0})));
+  });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(handle,
+                                                 graph_view,
+                                                 d_distances.data(),
+                                                 d_predecessors.data(),
+                                                 d_source.data(),
+                                                 size_t{1},
+                                                 std::make_optional(edge_mask.view()),
+                                                 std::nullopt,
+                                                 std::nullopt,
+                                                 true,
+                                                 direction_optimizing,
+                                                 std::numeric_limits<vertex_t>::max(),
+                                                 false,
+                                                 &predicate_result);
+
+  auto const invalid_distance = std::numeric_limits<vertex_t>::max();
+  expect_distances(handle,
+                   d_distances,
+                   direction_optimizing ? std::vector<vertex_t>{0, 3, 1, 2}
+                                        : std::vector<vertex_t>{0, invalid_distance, 1, 2});
+  EXPECT_FALSE(predicate_result.target_found);
+}
+
+template <typename vertex_t, typename edge_t>
+void run_sg_vertex_exclude_test(bool direction_optimizing)
+{
+  raft::handle_t handle{};
+  auto graph      = make_sg_graph<vertex_t, edge_t>(handle,
+                                               std::vector<vertex_t>{0, 1, 0, 2, 1, 3, 2, 3},
+                                               std::vector<vertex_t>{1, 0, 2, 0, 3, 1, 3, 2},
+                                               vertex_t{4},
+                                               true);
+  auto graph_view = graph.view();
+
+  auto d_vertex_allow_bitmap =
+    make_local_vertex_bitmap(handle,
+                             graph_view.local_vertex_partition_range_first(),
+                             graph_view.local_vertex_partition_range_last(),
+                             [](vertex_t v) { return v != vertex_t{1}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(
+    handle,
+    graph_view,
+    d_distances.data(),
+    d_predecessors.data(),
+    d_source.data(),
+    size_t{1},
+    std::nullopt,
+    std::make_optional<raft::device_span<uint32_t const>>(d_vertex_allow_bitmap.data(),
+                                                          d_vertex_allow_bitmap.size()),
+    std::nullopt,
+    true,
+    direction_optimizing,
+    std::numeric_limits<vertex_t>::max(),
+    false,
+    &predicate_result);
+
+  expect_distances(
+    handle, d_distances, std::vector<vertex_t>{0, std::numeric_limits<vertex_t>::max(), 1, 2});
+  EXPECT_FALSE(predicate_result.target_found);
+}
+
+template <typename vertex_t, typename edge_t>
+void run_sg_target_early_exit_test(bool direction_optimizing)
+{
+  raft::handle_t handle{};
+  auto graph      = make_sg_graph<vertex_t, edge_t>(handle,
+                                               std::vector<vertex_t>{0, 1, 1, 2, 2, 3, 3, 4},
+                                               std::vector<vertex_t>{1, 0, 2, 1, 3, 2, 4, 3},
+                                               vertex_t{5},
+                                               true);
+  auto graph_view = graph.view();
+
+  auto d_target_bitmap = make_local_vertex_bitmap(handle,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  graph_view.local_vertex_partition_range_last(),
+                                                  [](vertex_t v) { return v == vertex_t{2}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(
+    handle,
+    graph_view,
+    d_distances.data(),
+    d_predecessors.data(),
+    d_source.data(),
+    size_t{1},
+    std::nullopt,
+    std::nullopt,
+    std::make_optional<raft::device_span<uint32_t const>>(d_target_bitmap.data(),
+                                                          d_target_bitmap.size()),
+    true,
+    direction_optimizing,
+    std::numeric_limits<vertex_t>::max(),
+    false,
+    &predicate_result);
+
+  expect_distances(
+    handle,
+    d_distances,
+    std::vector<vertex_t>{
+      0, 1, 2, std::numeric_limits<vertex_t>::max(), std::numeric_limits<vertex_t>::max()});
+  EXPECT_TRUE(predicate_result.target_found);
+  EXPECT_EQ(predicate_result.target_distance, vertex_t{2});
+}
+
+}  // namespace
 
 struct BFS_Usecase {
   size_t source{0};
@@ -258,6 +508,226 @@ TEST_P(Tests_BFS_Rmat, CheckInt64Int64)
   auto param = GetParam();
   run_current_test<int64_t, int64_t>(
     std::get<0>(param), override_Rmat_Usecase_with_cmd_line_arguments(std::get<1>(param)));
+}
+
+TEST(BfsPredicateTest, EdgeMaskForcesAlternatePath)
+{
+  run_sg_edge_mask_test<int32_t, int32_t>(false);
+}
+
+TEST(BfsPredicateTest, EdgeMaskDirectionOptimizing)
+{
+  run_sg_edge_mask_test<int32_t, int32_t>(true);
+}
+
+TEST(BfsPredicateTest, VertexExcludePush) { run_sg_vertex_exclude_test<int32_t, int32_t>(false); }
+
+TEST(BfsPredicateTest, VertexExcludeDirectionOptimizing)
+{
+  run_sg_vertex_exclude_test<int32_t, int32_t>(true);
+}
+
+TEST(BfsPredicateTest, TargetEarlyExitPush)
+{
+  run_sg_target_early_exit_test<int32_t, int32_t>(false);
+}
+
+TEST(BfsPredicateTest, TargetEarlyExitDirectionOptimizing)
+{
+  run_sg_target_early_exit_test<int32_t, int32_t>(true);
+}
+
+TEST(BfsPredicateTest, TargetEarlyExitWithoutPredecessors)
+{
+  using vertex_t = int32_t;
+  using edge_t   = int32_t;
+
+  raft::handle_t handle{};
+  auto graph      = make_sg_graph<vertex_t, edge_t>(handle,
+                                               std::vector<vertex_t>{0, 1, 2, 3},
+                                               std::vector<vertex_t>{1, 2, 3, 4},
+                                               vertex_t{5},
+                                               false);
+  auto graph_view = graph.view();
+
+  auto d_target_bitmap = make_local_vertex_bitmap(handle,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  graph_view.local_vertex_partition_range_last(),
+                                                  [](vertex_t v) { return v == vertex_t{2}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(
+    handle,
+    graph_view,
+    d_distances.data(),
+    nullptr,
+    d_source.data(),
+    size_t{1},
+    std::nullopt,
+    std::nullopt,
+    std::make_optional<raft::device_span<uint32_t const>>(d_target_bitmap.data(),
+                                                          d_target_bitmap.size()),
+    true,
+    false,
+    std::numeric_limits<vertex_t>::max(),
+    false,
+    &predicate_result);
+
+  expect_distances(
+    handle,
+    d_distances,
+    std::vector<vertex_t>{
+      0, 1, 2, std::numeric_limits<vertex_t>::max(), std::numeric_limits<vertex_t>::max()});
+  EXPECT_TRUE(predicate_result.target_found);
+  EXPECT_EQ(predicate_result.target_distance, vertex_t{2});
+}
+
+TEST(BfsPredicateTest, SourceAsTargetStopsBeforeExpansion)
+{
+  using vertex_t = int32_t;
+  using edge_t   = int32_t;
+
+  raft::handle_t handle{};
+  auto graph      = make_sg_graph<vertex_t, edge_t>(handle,
+                                               std::vector<vertex_t>{0, 1, 2, 3},
+                                               std::vector<vertex_t>{1, 2, 3, 4},
+                                               vertex_t{5},
+                                               false);
+  auto graph_view = graph.view();
+
+  auto d_target_bitmap = make_local_vertex_bitmap(handle,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  graph_view.local_vertex_partition_range_last(),
+                                                  [](vertex_t v) { return v == vertex_t{0}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(
+    handle,
+    graph_view,
+    d_distances.data(),
+    d_predecessors.data(),
+    d_source.data(),
+    size_t{1},
+    std::nullopt,
+    std::nullopt,
+    std::make_optional<raft::device_span<uint32_t const>>(d_target_bitmap.data(),
+                                                          d_target_bitmap.size()),
+    true,
+    false,
+    std::numeric_limits<vertex_t>::max(),
+    false,
+    &predicate_result);
+
+  expect_distances(handle,
+                   d_distances,
+                   std::vector<vertex_t>{0,
+                                         std::numeric_limits<vertex_t>::max(),
+                                         std::numeric_limits<vertex_t>::max(),
+                                         std::numeric_limits<vertex_t>::max(),
+                                         std::numeric_limits<vertex_t>::max()});
+  EXPECT_TRUE(predicate_result.target_found);
+  EXPECT_EQ(predicate_result.target_distance, vertex_t{0});
+}
+
+TEST(BfsPredicateTest, DepthLimitBeforeTargetDoesNotReportTarget)
+{
+  using vertex_t = int32_t;
+  using edge_t   = int32_t;
+
+  raft::handle_t handle{};
+  auto graph      = make_sg_graph<vertex_t, edge_t>(handle,
+                                               std::vector<vertex_t>{0, 1, 2, 3},
+                                               std::vector<vertex_t>{1, 2, 3, 4},
+                                               vertex_t{5},
+                                               false);
+  auto graph_view = graph.view();
+
+  auto d_target_bitmap = make_local_vertex_bitmap(handle,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  graph_view.local_vertex_partition_range_last(),
+                                                  [](vertex_t v) { return v == vertex_t{2}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+  cugraph::bfs_predicate_result_t<vertex_t> predicate_result{};
+
+  cugraph::bfs_with_predicates<vertex_t, edge_t>(
+    handle,
+    graph_view,
+    d_distances.data(),
+    d_predecessors.data(),
+    d_source.data(),
+    size_t{1},
+    std::nullopt,
+    std::nullopt,
+    std::make_optional<raft::device_span<uint32_t const>>(d_target_bitmap.data(),
+                                                          d_target_bitmap.size()),
+    true,
+    false,
+    vertex_t{1},
+    false,
+    &predicate_result);
+
+  expect_distances(handle,
+                   d_distances,
+                   std::vector<vertex_t>{0,
+                                         1,
+                                         std::numeric_limits<vertex_t>::max(),
+                                         std::numeric_limits<vertex_t>::max(),
+                                         std::numeric_limits<vertex_t>::max()});
+  EXPECT_FALSE(predicate_result.target_found);
+}
+
+TEST(BfsPredicateTest, RejectedSourceThrows)
+{
+  using vertex_t = int32_t;
+  using edge_t   = int32_t;
+
+  raft::handle_t handle{};
+  auto graph = make_sg_graph<vertex_t, edge_t>(
+    handle, std::vector<vertex_t>{0, 1}, std::vector<vertex_t>{1, 2}, vertex_t{3}, false);
+  auto graph_view = graph.view();
+
+  auto d_vertex_allow_bitmap =
+    make_local_vertex_bitmap(handle,
+                             graph_view.local_vertex_partition_range_first(),
+                             graph_view.local_vertex_partition_range_last(),
+                             [](vertex_t v) { return v != vertex_t{0}; });
+
+  rmm::device_uvector<vertex_t> d_distances(graph_view.number_of_vertices(), handle.get_stream());
+  rmm::device_uvector<vertex_t> d_predecessors(graph_view.number_of_vertices(),
+                                               handle.get_stream());
+  rmm::device_scalar<vertex_t> d_source(vertex_t{0}, handle.get_stream());
+
+  auto run_bfs = [&]() {
+    cugraph::bfs_with_predicates<vertex_t, edge_t>(
+      handle,
+      graph_view,
+      d_distances.data(),
+      d_predecessors.data(),
+      d_source.data(),
+      size_t{1},
+      std::nullopt,
+      std::make_optional<raft::device_span<uint32_t const>>(d_vertex_allow_bitmap.data(),
+                                                            d_vertex_allow_bitmap.size()),
+      std::nullopt,
+      true,
+      false,
+      std::numeric_limits<vertex_t>::max(),
+      false,
+      nullptr);
+  };
+  EXPECT_THROW(run_bfs(), cugraph::logic_error);
 }
 
 INSTANTIATE_TEST_SUITE_P(

@@ -472,3 +472,60 @@ def test_scipy_api_compat():
     result = cugraph.bfs(input_coo_matrix, i_start=0)
     assert type(result) is tuple
     assert len(result) == 2
+
+
+@pytest.mark.sg
+def test_bfs_predicates_vertex_and_target():
+    df = cudf.DataFrame(
+        {
+            "src": cudf.Series([10, 10, 20, 30], dtype="int32"),
+            "dst": cudf.Series([20, 30, 40, 40], dtype="int32"),
+        }
+    )
+    G = cugraph.Graph(directed=True)
+    G.from_cudf_edgelist(df, source="src", destination="dst")
+
+    result, target_info = cugraph.bfs(
+        G,
+        10,
+        exclude_vertices=cudf.Series([20], dtype="int32"),
+        target_vertices=cudf.Series([40], dtype="int32"),
+        return_target_info=True,
+    )
+
+    distances = dict(zip(result["vertex"].to_pandas(), result["distance"].to_pandas()))
+    assert distances[10] == 0
+    assert distances[20] == np.iinfo(result["distance"].dtype).max
+    assert distances[30] == 1
+    assert distances[40] == 2
+    assert target_info == {"target_found": True, "target_distance": 2}
+
+
+@pytest.mark.sg
+def test_bfs_predicates_edge_ids():
+    df = cudf.DataFrame(
+        {
+            "src": cudf.Series([0, 0, 1, 2], dtype="int32"),
+            "dst": cudf.Series([1, 2, 3, 3], dtype="int32"),
+            "edge_id": cudf.Series([100, 200, 300, 400], dtype="int32"),
+        }
+    )
+    G = cugraph.Graph(directed=True)
+    G.from_cudf_edgelist(df, source="src", destination="dst", edge_id="edge_id")
+
+    result = cugraph.bfs(
+        G, 0, include_edge_ids=cudf.Series([200, 400], dtype="int32")
+    )
+
+    distances = dict(zip(result["vertex"].to_pandas(), result["distance"].to_pandas()))
+    assert distances[0] == 0
+    assert distances[1] == np.iinfo(result["distance"].dtype).max
+    assert distances[2] == 1
+    assert distances[3] == 2
+
+
+@pytest.mark.sg
+def test_bfs_predicates_reject_matrix_input():
+    input_coo_matrix = cp_coo_matrix(cp.array([[0, 1], [0, 0]], dtype=cp.float32))
+    with pytest.raises(NotImplementedError):
+        cugraph.bfs(input_coo_matrix, i_start=0, target_vertices=[1])
