@@ -64,30 +64,111 @@ struct direction_optimizing_info_t {
 
 template <typename vertex_t>
 struct topdown_e_op_t {
-  __device__ vertex_t operator()(vertex_t src,
-                                 vertex_t dst,
-                                 cuda::std::nullopt_t,
-                                 cuda::std::nullopt_t,
-                                 cuda::std::nullopt_t) const
+  template <typename EdgeSrcValue, typename EdgeDstValue, typename EdgeValue>
+  __device__ vertex_t
+  operator()(vertex_t src, vertex_t dst, EdgeSrcValue, EdgeDstValue, EdgeValue) const
   {
     return src;
   }
 };
 
-template <typename vertex_t, bool multi_gpu>
+struct edge_mask_predicate_t {
+  template <typename vertex_t, typename EdgeSrcValue, typename EdgeDstValue, typename EdgeValue>
+  __device__ bool operator()(
+    vertex_t, vertex_t, EdgeSrcValue, EdgeDstValue, EdgeValue edge_value) const
+  {
+    if constexpr (std::is_same_v<EdgeValue, cuda::std::nullopt_t>) {
+      return true;
+    } else {
+      return static_cast<bool>(edge_value);
+    }
+  }
+};
+
+template <typename vertex_t>
+struct local_vertex_bitmap_predicate_t {
+  raft::device_span<uint32_t const> bitmap{};
+  vertex_t vertex_first{};
+  bool enabled{false};
+
+  __device__ bool operator()(vertex_t v) const
+  {
+    if (!enabled) { return true; }
+    auto const v_offset = v - vertex_first;
+    auto const word     = bitmap[packed_bool_offset(v_offset)];
+    return (word & packed_bool_mask(v_offset)) != packed_bool_empty_mask();
+  }
+};
+
+template <typename vertex_t>
+struct local_target_bitmap_predicate_t {
+  raft::device_span<uint32_t const> bitmap{};
+  vertex_t vertex_first{};
+  bool enabled{false};
+
+  __device__ bool operator()(vertex_t v) const
+  {
+    if (!enabled) { return false; }
+    auto const v_offset = v - vertex_first;
+    auto const word     = bitmap[packed_bool_offset(v_offset)];
+    return (word & packed_bool_mask(v_offset)) != packed_bool_empty_mask();
+  }
+};
+
+template <typename T>
+struct is_local_target_bitmap_predicate : std::false_type {};
+
+template <typename vertex_t>
+struct is_local_target_bitmap_predicate<local_target_bitmap_predicate_t<vertex_t>>
+  : std::true_type {};
+
+template <typename GraphViewType, typename VertexIterator, typename TargetPredicate>
+bool frontier_has_target(raft::handle_t const& handle,
+                         GraphViewType const&,
+                         VertexIterator first,
+                         VertexIterator last,
+                         TargetPredicate target_predicate)
+{
+  // Skip the thrust::count_if launch when the predicate is statically known to be a
+  // disabled local_target_bitmap_predicate_t. This keeps the legacy non-predicate BFS
+  // path free of per-iteration kernel launches.
+  if constexpr (is_local_target_bitmap_predicate<TargetPredicate>::value) {
+    if (!target_predicate.enabled) { return false; }
+  }
+
+  auto local_count = thrust::count_if(
+    handle.get_thrust_policy(), first, last, [target_predicate] __device__(auto v) {
+      return target_predicate(v);
+    });
+
+  if constexpr (GraphViewType::is_multi_gpu) {
+    local_count = host_scalar_allreduce(
+      handle.get_comms(), local_count, raft::comms::op_t::SUM, handle.get_stream());
+  }
+
+  return local_count > 0;
+}
+
+template <typename vertex_t, bool multi_gpu, typename EdgePredicate, typename VertexPredicate>
 struct topdown_pred_op_t {
   detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t*, bool>
     prev_visited_flags{};  // visited in the previous iterations, to reduce the number of atomic
                            // operations
   detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t*, bool> visited_flags{};
   vertex_t dst_first{};
+  EdgePredicate edge_predicate{};
+  VertexPredicate vertex_predicate{};
 
+  template <typename EdgeSrcValue, typename EdgeDstValue, typename EdgeValue>
   __device__ bool operator()(vertex_t src,
                              vertex_t dst,
-                             cuda::std::nullopt_t,
-                             cuda::std::nullopt_t,
-                             cuda::std::nullopt_t) const
+                             EdgeSrcValue src_value,
+                             EdgeDstValue dst_value,
+                             EdgeValue edge_value) const
   {
+    if (!edge_predicate(src, dst, src_value, dst_value, edge_value)) { return false; }
+    if (!vertex_predicate(dst)) { return false; }
+
     auto dst_offset = dst - dst_first;
     auto old        = prev_visited_flags.get(dst_offset);
     if (!old) { old = visited_flags.atomic_or(dst_offset, true); }
@@ -97,28 +178,32 @@ struct topdown_pred_op_t {
 
 template <typename vertex_t>
 struct bottomup_e_op_t {
-  __device__ vertex_t operator()(vertex_t src,
-                                 vertex_t dst,
-                                 cuda::std::nullopt_t,
-                                 cuda::std::nullopt_t,
-                                 cuda::std::nullopt_t) const
+  template <typename EdgeSrcValue, typename EdgeDstValue, typename EdgeValue>
+  __device__ vertex_t
+  operator()(vertex_t src, vertex_t dst, EdgeSrcValue, EdgeDstValue, EdgeValue) const
   {
     return dst;
   }
 };
 
-template <typename vertex_t, bool multi_gpu>
+template <typename vertex_t, bool multi_gpu, typename EdgePredicate, typename VertexPredicate>
 struct bottomup_pred_op_t {
   detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t const*, bool>
     prev_visited_flags{};  // visited in the previous iterations
   vertex_t dst_first{};
+  EdgePredicate edge_predicate{};
+  VertexPredicate vertex_predicate{};
 
+  template <typename EdgeSrcValue, typename EdgeDstValue, typename EdgeValue>
   __device__ bool operator()(vertex_t src,
                              vertex_t dst,
-                             cuda::std::nullopt_t,
-                             cuda::std::nullopt_t,
-                             cuda::std::nullopt_t) const
+                             EdgeSrcValue src_value,
+                             EdgeDstValue dst_value,
+                             EdgeValue edge_value) const
   {
+    if (!edge_predicate(src, dst, src_value, dst_value, edge_value)) { return false; }
+    if (!vertex_predicate(src)) { return false; }
+
     return prev_visited_flags.get(dst - dst_first);
   }
 };
@@ -127,16 +212,28 @@ struct bottomup_pred_op_t {
 
 namespace detail {
 
-template <typename GraphViewType, typename PredecessorIterator>
-void bfs(raft::handle_t const& handle,
-         GraphViewType const& graph_view,
-         typename GraphViewType::vertex_type* distances,
-         PredecessorIterator predecessor_first,
-         typename GraphViewType::vertex_type const* sources,
-         size_t n_sources,
-         bool direction_optimizing,
-         typename GraphViewType::vertex_type depth_limit,
-         bool do_expensive_check)
+template <typename GraphViewType,
+          typename PredecessorIterator,
+          typename EdgeValueInputWrapper,
+          typename EdgePredicate,
+          typename VertexPredicate,
+          typename TargetPredicate>
+void bfs_predicate_impl(
+  raft::handle_t const& handle,
+  GraphViewType const& graph_view,
+  typename GraphViewType::vertex_type* distances,
+  PredecessorIterator predecessor_first,
+  typename GraphViewType::vertex_type const* sources,
+  size_t n_sources,
+  EdgeValueInputWrapper edge_value_input,
+  EdgePredicate edge_predicate,
+  VertexPredicate vertex_predicate,
+  TargetPredicate target_predicate,
+  bool stop_on_first_target,
+  bool direction_optimizing,
+  typename GraphViewType::vertex_type depth_limit,
+  bool do_expensive_check,
+  bfs_predicate_result_t<typename GraphViewType::vertex_type>* predicate_result)
 {
   using vertex_t = typename GraphViewType::vertex_type;
   using edge_t   = typename GraphViewType::edge_type;
@@ -150,6 +247,10 @@ void bfs(raft::handle_t const& handle,
   // Direction-Optimizing Breadth-First Search, 2012"
 
   auto const num_vertices = graph_view.number_of_vertices();
+  if (predicate_result != nullptr) {
+    *predicate_result =
+      bfs_predicate_result_t<vertex_t>{false, std::numeric_limits<vertex_t>::max()};
+  }
   if (num_vertices == 0) { return; }
 
   // we should consider reducing the life-time of this variable once
@@ -263,6 +364,20 @@ void bfs(raft::handle_t const& handle,
                     "Invalid input argument: sources have invalid vertex IDs.");
   }
 
+  auto num_rejected_sources =
+    n_sources > 0
+      ? thrust::count_if(handle.get_thrust_policy(),
+                         sources,
+                         sources + n_sources,
+                         [vertex_predicate] __device__(auto v) { return !vertex_predicate(v); })
+      : 0;
+  if constexpr (GraphViewType::is_multi_gpu) {
+    num_rejected_sources = host_scalar_allreduce(
+      handle.get_comms(), num_rejected_sources, raft::comms::op_t::SUM, handle.get_stream());
+  }
+  CUGRAPH_EXPECTS(num_rejected_sources == 0,
+                  "Invalid input argument: sources must satisfy the vertex predicate.");
+
   // 2. initialize distances and predecessors
 
   auto constexpr invalid_distance = std::numeric_limits<vertex_t>::max();
@@ -281,6 +396,14 @@ void bfs(raft::handle_t const& handle,
     cuda::make_transform_iterator(
       sources, detail::shift_left_t<vertex_t>{graph_view.local_vertex_partition_range_first()}));
   thrust::fill(handle.get_thrust_policy(), output_first, output_first + n_sources, vertex_t{0});
+
+  if ((n_sources > 0) &&
+      frontier_has_target(handle, graph_view, sources, sources + n_sources, target_predicate)) {
+    if (predicate_result != nullptr) {
+      *predicate_result = bfs_predicate_result_t<vertex_t>{true, vertex_t{0}};
+    }
+    return;
+  }
 
   // 3. update meta data for direction optimizing BFS
 
@@ -360,6 +483,20 @@ void bfs(raft::handle_t const& handle,
                  packed_bool_empty_mask());
     thrust::for_each(
       handle.get_thrust_policy(),
+      thrust::make_counting_iterator(graph_view.local_vertex_partition_range_first()),
+      thrust::make_counting_iterator(graph_view.local_vertex_partition_range_last()),
+      [bitmap = raft::device_span<uint32_t>(visited_bitmap.data(), visited_bitmap.size()),
+       vertex_predicate,
+       v_first = graph_view.local_vertex_partition_range_first()] __device__(auto v) {
+        if (!vertex_predicate(v)) {
+          auto v_offset = v - v_first;
+          cuda::atomic_ref<uint32_t, cuda::thread_scope_device> word(
+            bitmap[packed_bool_offset(v_offset)]);
+          word.fetch_or(packed_bool_mask(v_offset), cuda::std::memory_order_relaxed);
+        }
+      });
+    thrust::for_each(
+      handle.get_thrust_policy(),
       sources,
       sources + n_sources,
       [bitmap  = raft::device_span<uint32_t>(visited_bitmap.data(), visited_bitmap.size()),
@@ -376,6 +513,22 @@ void bfs(raft::handle_t const& handle,
       num_nzd_unvisited_low_degree_vertices = (*segment_offsets)[3] - (*segment_offsets)[2];
       if (graph_view.use_dcs()) {
         num_nzd_unvisited_hypersparse_vertices = (*segment_offsets)[4] - (*segment_offsets)[3];
+      }
+      *num_nzd_unvisited_low_degree_vertices -= static_cast<vertex_t>(thrust::count_if(
+        handle.get_thrust_policy(),
+        thrust::make_counting_iterator(graph_view.local_vertex_partition_range_first() +
+                                       (*segment_offsets)[2]),
+        thrust::make_counting_iterator(graph_view.local_vertex_partition_range_first() +
+                                       (*segment_offsets)[3]),
+        [vertex_predicate] __device__(auto v) { return !vertex_predicate(v); }));
+      if (graph_view.use_dcs()) {
+        *num_nzd_unvisited_hypersparse_vertices -= static_cast<vertex_t>(thrust::count_if(
+          handle.get_thrust_policy(),
+          thrust::make_counting_iterator(graph_view.local_vertex_partition_range_first() +
+                                         (*segment_offsets)[3]),
+          thrust::make_counting_iterator(graph_view.local_vertex_partition_range_first() +
+                                         (*segment_offsets)[4]),
+          [vertex_predicate] __device__(auto v) { return !vertex_predicate(v); }));
       }
       if (n_sources > 0) {
         auto h_sources = reinterpret_cast<vertex_t*>(h_staging_buffer_view.data());
@@ -444,14 +597,17 @@ void bfs(raft::handle_t const& handle,
   while (true) {
     vertex_t next_aggregate_frontier_size{};
     if (topdown) {
-      topdown_pred_op_t<vertex_t, GraphViewType::is_multi_gpu> pred_op{};
+      topdown_pred_op_t<vertex_t, GraphViewType::is_multi_gpu, EdgePredicate, VertexPredicate>
+        pred_op{};
       pred_op.prev_visited_flags =
         detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t*, bool>(
           prev_dst_visited_flags.mutable_view());
       pred_op.visited_flags =
         detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t*, bool>(
           dst_visited_flags.mutable_view());
-      pred_op.dst_first = graph_view.local_edge_partition_dst_range_first();
+      pred_op.dst_first        = graph_view.local_edge_partition_dst_range_first();
+      pred_op.edge_predicate   = edge_predicate;
+      pred_op.vertex_predicate = vertex_predicate;
 
       auto [new_frontier_vertex_buffer, predecessor_buffer] =
         cugraph::transform_reduce_if_v_frontier_outgoing_e_by_dst(
@@ -460,7 +616,7 @@ void bfs(raft::handle_t const& handle,
           cur_frontier_view,
           edge_src_dummy_property_t{}.view(),
           edge_dst_dummy_property_t{}.view(),
-          edge_dummy_property_t{}.view(),
+          edge_value_input,
           topdown_e_op_t<vertex_t>{},
           reduce_op::any<vertex_t>(),
           pred_op);
@@ -624,6 +780,16 @@ void bfs(raft::handle_t const& handle,
       }
       if (next_aggregate_frontier_size == 0) { break; }
 
+      {
+        auto const target_found_at_next_depth = frontier_has_target(
+          handle, graph_view, next_frontier.cbegin(), next_frontier.cend(), target_predicate);
+        if (target_found_at_next_depth && (predicate_result != nullptr) &&
+            !predicate_result->target_found) {
+          *predicate_result = bfs_predicate_result_t<vertex_t>{true, depth + 1};
+        }
+        if (target_found_at_next_depth && stop_on_first_target) { break; }
+      }
+
       fill_edge_dst_property(handle,
                              graph_view,
                              next_frontier.cbegin(),
@@ -679,11 +845,14 @@ void bfs(raft::handle_t const& handle,
       rmm::device_uvector<vertex_t> new_frontier_vertex_buffer(0, handle.get_stream());
       {
         bottomup_e_op_t<vertex_t> e_op{};
-        bottomup_pred_op_t<vertex_t, GraphViewType::is_multi_gpu> pred_op{};
+        bottomup_pred_op_t<vertex_t, GraphViewType::is_multi_gpu, EdgePredicate, VertexPredicate>
+          pred_op{};
         pred_op.prev_visited_flags =
           detail::edge_partition_endpoint_property_device_view_t<vertex_t, uint32_t const*, bool>(
             prev_dst_visited_flags.view());
-        pred_op.dst_first = graph_view.local_edge_partition_dst_range_first();
+        pred_op.dst_first        = graph_view.local_edge_partition_dst_range_first();
+        pred_op.edge_predicate   = edge_predicate;
+        pred_op.vertex_predicate = vertex_predicate;
 
         rmm::device_uvector<vertex_t> predecessor_buffer(cur_frontier_view.size(),
                                                          handle.get_stream());
@@ -692,7 +861,7 @@ void bfs(raft::handle_t const& handle,
                                              cur_frontier_view,
                                              edge_src_dummy_property_t{}.view(),
                                              edge_dst_dummy_property_t{}.view(),
-                                             edge_dummy_property_t{}.view(),
+                                             edge_value_input,
                                              e_op,
                                              invalid_vertex,
                                              reduce_op::any<vertex_t>(),
@@ -832,6 +1001,18 @@ void bfs(raft::handle_t const& handle,
 
       if (next_aggregate_frontier_size == 0) { break; }
 
+      auto const target_found_at_next_depth =
+        frontier_has_target(handle,
+                            graph_view,
+                            new_frontier_vertex_buffer.begin(),
+                            new_frontier_vertex_buffer.end(),
+                            target_predicate);
+      if (target_found_at_next_depth && (predicate_result != nullptr) &&
+          !predicate_result->target_found) {
+        *predicate_result = bfs_predicate_result_t<vertex_t>{true, depth + 1};
+      }
+      if (target_found_at_next_depth && stop_on_first_target) { break; }
+
       fill_edge_dst_property(handle,
                              graph_view,
                              new_frontier_vertex_buffer.begin(),
@@ -867,6 +1048,36 @@ void bfs(raft::handle_t const& handle,
   }
 }
 
+template <typename GraphViewType, typename PredecessorIterator>
+void bfs(raft::handle_t const& handle,
+         GraphViewType const& graph_view,
+         typename GraphViewType::vertex_type* distances,
+         PredecessorIterator predecessor_first,
+         typename GraphViewType::vertex_type const* sources,
+         size_t n_sources,
+         bool direction_optimizing,
+         typename GraphViewType::vertex_type depth_limit,
+         bool do_expensive_check)
+{
+  using vertex_t = typename GraphViewType::vertex_type;
+
+  bfs_predicate_impl(handle,
+                     graph_view,
+                     distances,
+                     predecessor_first,
+                     sources,
+                     n_sources,
+                     edge_dummy_property_t{}.view(),
+                     edge_mask_predicate_t{},
+                     local_vertex_bitmap_predicate_t<vertex_t>{},
+                     local_target_bitmap_predicate_t<vertex_t>{},
+                     false,
+                     direction_optimizing,
+                     depth_limit,
+                     do_expensive_check,
+                     nullptr);
+}
+
 }  // namespace detail
 
 template <typename vertex_t, typename edge_t, bool multi_gpu>
@@ -900,6 +1111,108 @@ void bfs(raft::handle_t const& handle,
                 direction_optimizing,
                 depth_limit,
                 do_expensive_check);
+  }
+}
+
+template <typename vertex_t, typename edge_t>
+void bfs_with_predicates(
+  raft::handle_t const& handle,
+  graph_view_t<vertex_t, edge_t, false, false> const& graph_view,
+  vertex_t* distances,
+  vertex_t* predecessors,
+  vertex_t const* sources,
+  size_t n_sources,
+  std::optional<edge_property_view_t<edge_t, uint32_t const*, bool>> edge_mask,
+  std::optional<raft::device_span<uint32_t const>> vertex_allow_bitmap,
+  std::optional<raft::device_span<uint32_t const>> target_bitmap,
+  bool stop_on_first_target,
+  bool direction_optimizing,
+  vertex_t depth_limit,
+  bool do_expensive_check,
+  bfs_predicate_result_t<vertex_t>* predicate_result)
+{
+  auto vertex_predicate =
+    vertex_allow_bitmap
+      ? local_vertex_bitmap_predicate_t<vertex_t>{*vertex_allow_bitmap,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  true}
+      : local_vertex_bitmap_predicate_t<vertex_t>{};
+  auto target_predicate =
+    target_bitmap
+      ? local_target_bitmap_predicate_t<vertex_t>{*target_bitmap,
+                                                  graph_view.local_vertex_partition_range_first(),
+                                                  true}
+      : local_target_bitmap_predicate_t<vertex_t>{};
+
+  if (predecessors != nullptr) {
+    if (edge_mask) {
+      detail::bfs_predicate_impl(handle,
+                                 graph_view,
+                                 distances,
+                                 predecessors,
+                                 sources,
+                                 n_sources,
+                                 *edge_mask,
+                                 edge_mask_predicate_t{},
+                                 vertex_predicate,
+                                 target_predicate,
+                                 stop_on_first_target,
+                                 direction_optimizing,
+                                 depth_limit,
+                                 do_expensive_check,
+                                 predicate_result);
+    } else {
+      detail::bfs_predicate_impl(handle,
+                                 graph_view,
+                                 distances,
+                                 predecessors,
+                                 sources,
+                                 n_sources,
+                                 edge_dummy_property_t{}.view(),
+                                 edge_mask_predicate_t{},
+                                 vertex_predicate,
+                                 target_predicate,
+                                 stop_on_first_target,
+                                 direction_optimizing,
+                                 depth_limit,
+                                 do_expensive_check,
+                                 predicate_result);
+    }
+  } else {
+    auto predecessor_first = thrust::make_discard_iterator();
+    if (edge_mask) {
+      detail::bfs_predicate_impl(handle,
+                                 graph_view,
+                                 distances,
+                                 predecessor_first,
+                                 sources,
+                                 n_sources,
+                                 *edge_mask,
+                                 edge_mask_predicate_t{},
+                                 vertex_predicate,
+                                 target_predicate,
+                                 stop_on_first_target,
+                                 direction_optimizing,
+                                 depth_limit,
+                                 do_expensive_check,
+                                 predicate_result);
+    } else {
+      detail::bfs_predicate_impl(handle,
+                                 graph_view,
+                                 distances,
+                                 predecessor_first,
+                                 sources,
+                                 n_sources,
+                                 edge_dummy_property_t{}.view(),
+                                 edge_mask_predicate_t{},
+                                 vertex_predicate,
+                                 target_predicate,
+                                 stop_on_first_target,
+                                 direction_optimizing,
+                                 depth_limit,
+                                 do_expensive_check,
+                                 predicate_result);
+    }
   }
 }
 

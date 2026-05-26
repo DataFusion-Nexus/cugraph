@@ -30,6 +30,15 @@ typedef struct {
 } cugraph_paths_result_t;
 
 /**
+ * @brief     Opaque BFS predicate result type
+ *
+ * Store target-discovery metadata for cugraph_bfs_with_predicates.
+ */
+typedef struct {
+  int32_t align_;
+} cugraph_bfs_predicate_result_t;
+
+/**
  * @ingroup traversal
  * @brief     Get the vertex ids from the paths result
  *
@@ -70,6 +79,37 @@ CUGRAPH_EXPORT cugraph_type_erased_device_array_view_t* cugraph_paths_result_get
 CUGRAPH_EXPORT void cugraph_paths_result_free(cugraph_paths_result_t* result);
 
 /**
+ * @ingroup traversal
+ * @brief     Return whether a target was discovered.
+ *
+ * @param [in]   result   The predicate result from cugraph_bfs_with_predicates
+ * @return TRUE if a target was discovered, FALSE otherwise
+ */
+CUGRAPH_EXPORT bool_t
+cugraph_bfs_predicate_result_get_target_found(cugraph_bfs_predicate_result_t* result);
+
+/**
+ * @ingroup traversal
+ * @brief     Return the BFS depth where a target was first discovered.
+ *
+ * The value is meaningful only when
+ * cugraph_bfs_predicate_result_get_target_found returns TRUE.
+ *
+ * @param [in]   result   The predicate result from cugraph_bfs_with_predicates
+ * @return target discovery distance
+ */
+CUGRAPH_EXPORT size_t
+cugraph_bfs_predicate_result_get_target_distance(cugraph_bfs_predicate_result_t* result);
+
+/**
+ * @ingroup traversal
+ * @brief     Free BFS predicate result
+ *
+ * @param [in]   result   The predicate result from cugraph_bfs_with_predicates
+ */
+CUGRAPH_EXPORT void cugraph_bfs_predicate_result_free(cugraph_bfs_predicate_result_t* result);
+
+/**
  * @brief     Perform a breadth first search from a set of seed vertices.
  *
  * This function computes the distances (minimum number of hops to reach the vertex) from the source
@@ -107,6 +147,49 @@ cugraph_bfs(const cugraph_resource_handle_t* handle,
             bool_t do_expensive_check,
             cugraph_paths_result_t** result,
             cugraph_error_t** error);
+
+/**
+ * @brief     Perform a breadth first search with optional edge, vertex, and target predicates.
+ *
+ * Vertex and target predicate inputs use external vertex IDs. Edge predicate input uses external
+ * edge IDs and requires the graph to have edge IDs. Passing both @p include_vertices and
+ * @p exclude_vertices is invalid. Source vertices rejected by the vertex predicate are invalid
+ * input. Target discovery is level-synchronous: when @p stop_on_first_target is TRUE, traversal
+ * stops after the first depth where a target is discovered.
+ *
+ * @param [in]  handle       Handle for accessing resources
+ * @param [in]  graph        Pointer to graph
+ * @param [in]  sources      Array of source vertices
+ * @param [in]  include_vertices Optional array of vertices allowed to be reached
+ * @param [in]  exclude_vertices Optional array of vertices not allowed to be reached
+ * @param [in]  target_vertices Optional array of target vertices for early termination metadata
+ * @param [in]  include_edge_ids Optional array of edge IDs allowed to be traversed
+ * @param [in]  direction_optimizing If set to true, enable direction-optimizing BFS
+ * @param depth_limit Sets the maximum number of breadth-first search iterations
+ * @param [in] compute_predecessors A flag to indicate whether to compute predecessors
+ * @param [in] stop_on_first_target A flag to stop after discovering a target depth
+ * @param [in] do_expensive_check A flag to run expensive checks for input arguments
+ * @param [out] result       Opaque pointer to paths results
+ * @param [out] predicate_result Opaque pointer to target predicate metadata. May be NULL
+ * @param [out] error        Pointer to an error object storing details of any error
+ * @return error code
+ */
+CUGRAPH_EXPORT cugraph_error_code_t cugraph_bfs_with_predicates(
+  const cugraph_resource_handle_t* handle,
+  cugraph_graph_t* graph,
+  cugraph_type_erased_device_array_view_t* sources,
+  const cugraph_type_erased_device_array_view_t* include_vertices,
+  const cugraph_type_erased_device_array_view_t* exclude_vertices,
+  const cugraph_type_erased_device_array_view_t* target_vertices,
+  const cugraph_type_erased_device_array_view_t* include_edge_ids,
+  bool_t direction_optimizing,
+  size_t depth_limit,
+  bool_t compute_predecessors,
+  bool_t stop_on_first_target,
+  bool_t do_expensive_check,
+  cugraph_paths_result_t** result,
+  cugraph_bfs_predicate_result_t** predicate_result,
+  cugraph_error_t** error);
 
 /**
  * @brief     Perform single-source shortest-path to compute the minimum distances
