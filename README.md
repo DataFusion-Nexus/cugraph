@@ -31,3 +31,11 @@ cuGraph layers:
 
 The fork includes focused C++, C API, and Python tests for predicate-aware BFS behavior, including
 edge filtering, vertex filtering, target discovery, and public Python API coverage.
+
+This fork also carries a narrow cuGraph v26.06 SCC mitigation for Blackwell (`sm_120`) local source
+builds. Official RAPIDS v26.06 prebuilt libraries pass SCC on this GPU, but clean local source-built
+`libcugraph.so` fails inside `cugraph_strongly_connected_components` with
+`cudaErrorInvalidDeviceFunction`. Because this fork needs the local BFS predicate extension, it
+cannot simply switch to the official prebuilt library. The mitigation keeps the upstream SCC path for
+non-`sm_120` and multi-GPU builds, and routes only single-GPU `sm_120` C API SCC through a host-side
+fallback while preserving the normal labeling-result shape.

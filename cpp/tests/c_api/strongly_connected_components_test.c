@@ -107,11 +107,49 @@ int test_strongly_connected_components()
   return generic_scc_test(h_src, h_dst, h_wgt, h_result, num_vertices, num_edges, FALSE);
 }
 
+int test_strongly_connected_components_rejects_symmetric_graph()
+{
+  int test_ret_value = 0;
+
+  cugraph_error_code_t ret_code = CUGRAPH_SUCCESS;
+  cugraph_error_t* ret_error    = NULL;
+
+  cugraph_resource_handle_t* p_handle = NULL;
+  cugraph_graph_t* p_graph            = NULL;
+  cugraph_labeling_result_t* p_result = NULL;
+
+  vertex_t h_src[] = {0, 1, 1, 2};
+  vertex_t h_dst[] = {1, 0, 2, 1};
+  weight_t h_wgt[] = {1.0, 1.0, 1.0, 1.0};
+
+  p_handle = cugraph_create_resource_handle(NULL);
+  TEST_ASSERT(test_ret_value, p_handle != NULL, "resource handle creation failed.");
+
+  ret_code =
+    create_test_graph(p_handle, h_src, h_dst, h_wgt, 4, FALSE, FALSE, TRUE, &p_graph, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "create_test_graph failed.");
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, cugraph_error_message(ret_error));
+
+  ret_code = cugraph_strongly_connected_components(p_handle, p_graph, FALSE, &p_result, &ret_error);
+
+  TEST_ASSERT(test_ret_value,
+              ret_code == CUGRAPH_INVALID_INPUT,
+              "symmetric graph should be rejected by strongly connected components.");
+  TEST_ASSERT(test_ret_value, p_result == NULL, "result should be NULL after invalid input.");
+
+  cugraph_graph_free(p_graph);
+  cugraph_free_resource_handle(p_handle);
+  cugraph_error_free(ret_error);
+
+  return test_ret_value;
+}
+
 /******************************************************************************/
 
 int main(int argc, char** argv)
 {
   int result = 0;
   result |= RUN_TEST(test_strongly_connected_components);
+  result |= RUN_TEST(test_strongly_connected_components_rejects_symmetric_graph);
   return result;
 }
