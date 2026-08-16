@@ -95,14 +95,19 @@ struct betweenness_centrality_functor : public cugraph::c_api::abstract_functor 
                                           std::vector<cugraph::arithmetic_device_uvector_t>{});
         }
 
-        cugraph::renumber_ext_vertices<vertex_t, multi_gpu>(
-          handle_,
-          local_vertices.data(),
-          local_vertices.size(),
-          number_map->data(),
-          graph_view.local_vertex_partition_range_first(),
-          graph_view.local_vertex_partition_range_last(),
-          do_expensive_check_);
+        try {
+          cugraph::renumber_ext_vertices<vertex_t, multi_gpu>(
+            handle_,
+            local_vertices.data(),
+            local_vertices.size(),
+            number_map->data(),
+            graph_view.local_vertex_partition_range_first(),
+            graph_view.local_vertex_partition_range_last(),
+            do_expensive_check_);
+        } catch (cugraph::logic_error const& ex) {
+          mark_error(CUGRAPH_INVALID_INPUT, ex.what());
+          return;
+        }
 
         vertex_span =
           raft::device_span<vertex_t const>{local_vertices.data(), local_vertices.size()};
@@ -202,14 +207,19 @@ struct edge_betweenness_centrality_functor : public cugraph::c_api::abstract_fun
                                           std::vector<cugraph::arithmetic_device_uvector_t>{});
         }
 
-        cugraph::renumber_ext_vertices<vertex_t, multi_gpu>(
-          handle_,
-          local_vertices.data(),
-          local_vertices.size(),
-          number_map->data(),
-          graph_view.local_vertex_partition_range_first(),
-          graph_view.local_vertex_partition_range_last(),
-          do_expensive_check_);
+        try {
+          cugraph::renumber_ext_vertices<vertex_t, multi_gpu>(
+            handle_,
+            local_vertices.data(),
+            local_vertices.size(),
+            number_map->data(),
+            graph_view.local_vertex_partition_range_first(),
+            graph_view.local_vertex_partition_range_last(),
+            do_expensive_check_);
+        } catch (cugraph::logic_error const& ex) {
+          mark_error(CUGRAPH_INVALID_INPUT, ex.what());
+          return;
+        }
 
         vertex_span =
           raft::device_span<vertex_t const>{local_vertices.data(), local_vertices.size()};

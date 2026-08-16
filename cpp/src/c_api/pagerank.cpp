@@ -202,16 +202,21 @@ struct pagerank_functor : public cugraph::c_api::abstract_functor {
                    initial_guess_values.size(),
                    handle_.get_stream());
 
-        initial_pageranks = cugraph::detail::
-          collect_local_vertex_values_from_ext_vertex_value_pairs<vertex_t, weight_t, multi_gpu>(
-            handle_,
-            std::move(initial_guess_vertices),
-            std::move(initial_guess_values),
-            *number_map,
-            graph_view.local_vertex_partition_range_first(),
-            graph_view.local_vertex_partition_range_last(),
-            weight_t{0},
-            do_expensive_check_);
+        try {
+          initial_pageranks = cugraph::detail::
+            collect_local_vertex_values_from_ext_vertex_value_pairs<vertex_t, weight_t, multi_gpu>(
+              handle_,
+              std::move(initial_guess_vertices),
+              std::move(initial_guess_values),
+              *number_map,
+              graph_view.local_vertex_partition_range_first(),
+              graph_view.local_vertex_partition_range_last(),
+              weight_t{0},
+              do_expensive_check_);
+        } catch (cugraph::logic_error const& ex) {
+          mark_error(CUGRAPH_INVALID_INPUT, ex.what());
+          return;
+        }
       }
 
       auto [pageranks, metadata] =

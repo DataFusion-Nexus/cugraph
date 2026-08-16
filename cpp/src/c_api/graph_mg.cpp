@@ -427,12 +427,13 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
                  *error);
   }
 
-  size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
-                                                    local_num_edges,
-                                                    raft::comms::op_t::SUM,
-                                                    p_handle->handle_->get_stream());
-
   cugraph_data_type_id_t edge_type{vertex_type};
+  cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
+  try {
+    size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
+                                                      local_num_edges,
+                                                      raft::comms::op_t::SUM,
+                                                      p_handle->handle_->get_stream());
 
   if (vertex_type == cugraph_data_type_id_t::INT32)
     CAPI_EXPECTS(num_edges < int32_threshold,
@@ -476,7 +477,6 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
     weight_type = cugraph_data_type_id_t::FLOAT32;
   }
 
-  cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
 
   for (size_t i = 0; i < num_arrays; ++i) {
     CAPI_EXPECTS((edge_ids == nullptr) || (p_edge_ids[i]->size_ == p_src[i]->size_),
@@ -518,8 +518,21 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
     "different edge_type_id type used on different GPUs",
     *error);
 
-  if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
-    edge_type_id_type = cugraph_data_type_id_t::INT32;
+    if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
+      edge_type_id_type = cugraph_data_type_id_t::INT32;
+    }
+  } catch (rmm::out_of_memory const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (rmm::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::exception const& ex) {
+    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
+    return CUGRAPH_UNKNOWN_ERROR;
   }
 
   //
@@ -692,12 +705,13 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
     }
   }
 
-  size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
-                                                    local_num_edges,
-                                                    raft::comms::op_t::SUM,
-                                                    p_handle->handle_->get_stream());
-
   cugraph_data_type_id_t edge_type{vertex_type};
+  cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
+  try {
+    size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
+                                                      local_num_edges,
+                                                      raft::comms::op_t::SUM,
+                                                      p_handle->handle_->get_stream());
 
   if (vertex_type == cugraph_data_type_id_t::INT32)
     CAPI_EXPECTS(num_edges < int32_threshold,
@@ -763,7 +777,6 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
     edge_time_type = cugraph_data_type_id_t::INT32;
   }
 
-  cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
 
   for (size_t i = 0; i < num_arrays; ++i) {
     CAPI_EXPECTS((edge_ids == nullptr) || (p_edge_ids[i]->size_ == p_src[i]->size_),
@@ -815,8 +828,21 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
     "different edge_type_id type used on different GPUs",
     *error);
 
-  if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
-    edge_type_id_type = cugraph_data_type_id_t::INT32;
+    if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
+      edge_type_id_type = cugraph_data_type_id_t::INT32;
+    }
+  } catch (rmm::out_of_memory const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (rmm::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::exception const& ex) {
+    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
+    return CUGRAPH_UNKNOWN_ERROR;
   }
 
   //
