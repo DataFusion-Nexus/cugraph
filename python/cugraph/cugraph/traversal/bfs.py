@@ -6,6 +6,7 @@ import dask_cudf
 
 from pylibcugraph import ResourceHandle
 from pylibcugraph import bfs as pylibcugraph_bfs
+from pylibcugraph import bfs_with_predicates as pylibcugraph_bfs_with_predicates
 
 from cugraph.structure.graph_classes import Graph
 from cugraph.utilities import (
@@ -66,6 +67,27 @@ def _convert_df_to_output_type(df, input_type):
         raise TypeError(f"input type {input_type} is not a supported type.")
 
 
+def _prepare_vertex_set(G, vertices):
+    if vertices is None:
+        return None
+    is_dataframe = isinstance(vertices, cudf.DataFrame) or isinstance(vertices, dask_cudf.DataFrame)
+    if G.renumbered is True:
+        if is_dataframe:
+            return G.lookup_internal_vertex_id(vertices, vertices.columns)
+        return G.lookup_internal_vertex_id(cudf.Series(vertices))
+    if is_dataframe:
+        return vertices[vertices.columns[0]]
+    return cudf.Series(vertices, dtype=G.nodes().dtype)
+
+
+def _prepare_edge_id_set(edge_ids):
+    if edge_ids is None:
+        return None
+    if isinstance(edge_ids, cudf.Series):
+        return edge_ids
+    return cudf.Series(edge_ids)
+
+
 def bfs(
     G,
     start=None,
@@ -73,6 +95,12 @@ def bfs(
     i_start=None,
     directed=None,
     return_predecessors=True,
+    *,
+    include_vertices=None,
+    exclude_vertices=None,
+    target_vertices=None,
+    include_edge_ids=None,
+    return_target_info=False,
 ):
     """
     Find the distances and predecessors for a breadth first traversal of a
@@ -148,9 +176,13 @@ def bfs(
 
     """
     (start, directed) = _ensure_args(G, start, i_start, directed)
+    has_predicates = any(value is not None for value in (
+        include_vertices, exclude_vertices, target_vertices, include_edge_ids))
 
     # FIXME: allow nx_weight_attr to be specified
     (G, input_type) = ensure_cugraph_obj(G, matrix_graph_type=Graph(directed=directed))
+    if (input_type is not Graph) and (has_predicates or return_target_info):
+        raise NotImplementedError("BFS predicate parameters require a cugraph.Graph input")
 
     # The BFS C++ extension assumes the start vertex is a cudf.Series object,
     # and operates on internal vertex IDs if renumbered.
@@ -170,15 +202,26 @@ def bfs(
             vertex_dtype = G.nodes().dtype
             start = cudf.Series(start, dtype=vertex_dtype)
 
-    distances, predecessors, vertices = pylibcugraph_bfs(
-        handle=ResourceHandle(),
-        graph=G._plc_graph,
-        sources=start,
-        direction_optimizing=False,
-        depth_limit=depth_limit if depth_limit is not None else -1,
-        compute_predecessors=return_predecessors,
-        do_expensive_check=False,
-    )
+    if has_predicates or return_target_info:
+        if include_vertices is not None and exclude_vertices is not None:
+            raise ValueError("include_vertices and exclude_vertices are mutually exclusive")
+        include_vertices = _prepare_vertex_set(G, include_vertices)
+        exclude_vertices = _prepare_vertex_set(G, exclude_vertices)
+        target_vertices = _prepare_vertex_set(G, target_vertices)
+        include_edge_ids = _prepare_edge_id_set(include_edge_ids)
+        distances, predecessors, vertices, target_info = pylibcugraph_bfs_with_predicates(
+            handle=ResourceHandle(), graph=G._plc_graph, sources=start,
+            direction_optimizing=False, depth_limit=depth_limit if depth_limit is not None else -1,
+            compute_predecessors=return_predecessors,
+            stop_on_first_target=target_vertices is not None, do_expensive_check=False,
+            include_vertices=include_vertices, exclude_vertices=exclude_vertices,
+            target_vertices=target_vertices, include_edge_ids=include_edge_ids)
+    else:
+        distances, predecessors, vertices = pylibcugraph_bfs(
+            handle=ResourceHandle(), graph=G._plc_graph, sources=start,
+            direction_optimizing=False, depth_limit=depth_limit if depth_limit is not None else -1,
+            compute_predecessors=return_predecessors, do_expensive_check=False)
+        target_info = None
 
     result_df = cudf.DataFrame(
         {
@@ -193,7 +236,10 @@ def bfs(
         result_df = G.unrenumber(result_df, "predecessor")
         result_df.fillna(-1, inplace=True)
 
-    return _convert_df_to_output_type(result_df, input_type)
+    converted_result = _convert_df_to_output_type(result_df, input_type)
+    if return_target_info:
+        return converted_result, target_info
+    return converted_result
 
 
 def bfs_edges(G, source, reverse=False, depth_limit=None, sort_neighbors=None):

@@ -32,6 +32,9 @@ cdef extern from "cugraph_c/algorithms.h":
     ctypedef struct cugraph_paths_result_t:
         pass
 
+    ctypedef struct cugraph_bfs_predicate_result_t:
+        pass
+
     cdef cugraph_type_erased_device_array_view_t* \
         cugraph_paths_result_get_vertices(
             cugraph_paths_result_t* result
@@ -50,6 +53,21 @@ cdef extern from "cugraph_c/algorithms.h":
     cdef void \
         cugraph_paths_result_free(
             cugraph_paths_result_t* result
+        )
+
+    cdef bool_t \
+        cugraph_bfs_predicate_result_get_target_found(
+            cugraph_bfs_predicate_result_t* result
+        )
+
+    cdef size_t \
+        cugraph_bfs_predicate_result_get_target_distance(
+            cugraph_bfs_predicate_result_t* result
+        )
+
+    cdef void \
+        cugraph_bfs_predicate_result_free(
+            cugraph_bfs_predicate_result_t* result
         )
 
     ctypedef struct cugraph_extract_paths_result_t:
@@ -94,6 +112,25 @@ cdef extern from "cugraph_c/algorithms.h":
             bool_t compute_predecessors,
             bool_t do_expensive_check,
             cugraph_paths_result_t** result,
+            cugraph_error_t** error
+        )
+
+    cdef cugraph_error_code_t \
+        cugraph_bfs_with_predicates(
+            const cugraph_resource_handle_t* handle,
+            cugraph_graph_t* graph,
+            cugraph_type_erased_device_array_view_t* sources,
+            const cugraph_type_erased_device_array_view_t* include_vertices,
+            const cugraph_type_erased_device_array_view_t* exclude_vertices,
+            const cugraph_type_erased_device_array_view_t* target_vertices,
+            const cugraph_type_erased_device_array_view_t* include_edge_ids,
+            bool_t direction_optimizing,
+            size_t depth_limit,
+            bool_t compute_predecessors,
+            bool_t stop_on_first_target,
+            bool_t do_expensive_check,
+            cugraph_paths_result_t** result,
+            cugraph_bfs_predicate_result_t** predicate_result,
             cugraph_error_t** error
         )
 

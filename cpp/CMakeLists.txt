@@ -676,6 +676,7 @@ add_library(cugraph_c
         src/c_api/induced_subgraph_result.cpp
         src/c_api/hits.cpp
         src/c_api/bfs.cpp
+        src/c_api/bfs_edge_id_mask.cu
         src/c_api/sssp.cpp
         src/c_api/extract_paths.cpp
         src/c_api/random_walks.cpp
@@ -745,7 +746,7 @@ target_include_directories(cugraph_c
 
 ################################################################################
 # - C-API link libraries -------------------------------------------------------
-target_link_libraries(cugraph_c PRIVATE cugraph::cugraph cugraph::cugraph_mg)
+target_link_libraries(cugraph_c PRIVATE cugraph::cugraph cugraph::cugraph_mg cuco::cuco)
 
 # dlpack is a header-only dependency of the public cugraph_c/dlpack_interop.h
 # header. Expose its include directory to build-tree consumers (e.g. the C API

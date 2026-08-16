@@ -19,6 +19,8 @@
 
 #include <rmm/resource_ref.hpp>
 
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <tuple>
 
@@ -1067,6 +1069,21 @@ weight_t hungarian(raft::handle_t const& handle,
 
 /**
  * @ingroup traversal_cpp
+ * @brief Result metadata for predicate-aware BFS.
+ *
+ * `target_found` is true when the target predicate matched a discovered vertex. `target_distance`
+ * is the minimum BFS depth at which any target was discovered if `target_found` is true.
+ *
+ * @tparam vertex_t Type of vertex identifiers. Needs to be an integral type.
+ */
+template <typename vertex_t>
+struct bfs_predicate_result_t {
+  bool target_found{false};
+  vertex_t target_distance{std::numeric_limits<vertex_t>::max()};
+};
+
+/**
+ * @ingroup traversal_cpp
  * @brief Run breadth-first search to find the distances (and predecessors) from the source
  * vertex.
  *
@@ -1133,6 +1150,57 @@ rmm::device_uvector<vertex_t> topological_sort(
   raft::handle_t const& handle,
   graph_view_t<vertex_t, edge_t, false, multi_gpu> const& graph_view,
   bool do_expensive_check = false);
+
+/**
+ * @ingroup traversal_cpp
+ * @brief Run breadth-first search with storage-aligned edge and local vertex predicates.
+ *
+ * This function preserves the existing BFS output contract while adding concrete predicate
+ * surfaces for internal and C/Python lowering paths. `edge_mask`, when present, is expected to be
+ * aligned to the graph's internal edge storage. `vertex_allow_bitmap` and `target_bitmap`, when
+ * present, are packed local-vertex bitmaps indexed from
+ * `graph_view.local_vertex_partition_range_first()`.
+ *
+ * If `target_bitmap` contains a source vertex, `predicate_result` reports distance 0 and the
+ * traversal returns without expanding edges. Otherwise target discovery is level-synchronous:
+ * vertices discovered at the target depth may be written, and no deeper BFS level is expanded when
+ * `stop_on_first_target` is true.
+ *
+ * @throws cugraph::logic_error on erroneous input arguments.
+ *
+ * @tparam vertex_t Type of vertex identifiers. Needs to be an integral type.
+ * @tparam edge_t Type of edge identifiers. Needs to be an integral type.
+ * @param handle RAFT handle object to encapsulate resources.
+ * @param graph_view Graph view object.
+ * @param distances Pointer to the output distance array.
+ * @param predecessors Pointer to the output predecessor array or `nullptr`.
+ * @param sources Source vertices to start breadth-first search.
+ * @param n_sources Number of sources.
+ * @param edge_mask Optional packed edge mask aligned to the graph's local edge partitions.
+ * @param vertex_allow_bitmap Optional packed local vertex allow bitmap.
+ * @param target_bitmap Optional packed local target bitmap.
+ * @param stop_on_first_target Stop after discovering the first target depth if true.
+ * @param direction_optimizing Enable direction-optimizing BFS for symmetric graphs.
+ * @param depth_limit Sets the maximum number of breadth-first search iterations.
+ * @param do_expensive_check A flag to run expensive checks for input arguments.
+ * @param predicate_result Optional pointer to target discovery metadata.
+ */
+template <typename vertex_t, typename edge_t>
+void bfs_with_predicates(
+  raft::handle_t const& handle,
+  graph_view_t<vertex_t, edge_t, false, false> const& graph_view,
+  vertex_t* distances,
+  vertex_t* predecessors,
+  vertex_t const* sources,
+  size_t n_sources,
+  std::optional<edge_property_view_t<edge_t, uint32_t const*, bool>> edge_mask,
+  std::optional<raft::device_span<uint32_t const>> vertex_allow_bitmap,
+  std::optional<raft::device_span<uint32_t const>> target_bitmap,
+  bool stop_on_first_target,
+  bool direction_optimizing                          = false,
+  vertex_t depth_limit                               = std::numeric_limits<vertex_t>::max(),
+  bool do_expensive_check                            = false,
+  bfs_predicate_result_t<vertex_t>* predicate_result = nullptr);
 
 /**
  * @ingroup traversal_cpp

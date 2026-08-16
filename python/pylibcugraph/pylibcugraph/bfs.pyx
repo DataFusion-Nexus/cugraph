@@ -14,7 +14,12 @@ from pylibcugraph.has_vertex import has_vertex
 from pylibcugraph.resource_handle cimport ResourceHandle
 from pylibcugraph._cugraph_c.algorithms cimport (
     cugraph_bfs,
+    cugraph_bfs_with_predicates,
     cugraph_paths_result_t,
+    cugraph_bfs_predicate_result_t,
+    cugraph_bfs_predicate_result_get_target_found,
+    cugraph_bfs_predicate_result_get_target_distance,
+    cugraph_bfs_predicate_result_free,
     cugraph_paths_result_get_vertices,
     cugraph_paths_result_get_predecessors,
     cugraph_paths_result_get_distances,
@@ -23,6 +28,7 @@ from pylibcugraph._cugraph_c.algorithms cimport (
 from pylibcugraph._cugraph_c.array cimport (
     cugraph_type_erased_device_array_view_t,
     cugraph_type_erased_device_array_view_create,
+    cugraph_type_erased_device_array_view_free,
 )
 from pylibcugraph._cugraph_c.types cimport (
     bool_t,
@@ -39,6 +45,7 @@ from pylibcugraph.utils cimport (
     copy_to_cupy_array,
     assert_CAI_type,
     get_c_type_from_numpy_type,
+    create_cugraph_type_erased_device_array_view_from_py_obj,
 )
 from pylibcugraph._cugraph_c.graph cimport (
     cugraph_graph_t,
@@ -192,5 +199,87 @@ def bfs(ResourceHandle handle, _GPUGraph graph,
 
     # deallocate the no-longer needed result struct
     cugraph_paths_result_free(result_ptr)
+    cugraph_type_erased_device_array_view_free(sources_view_ptr)
 
     return (cupy_distances, cupy_predecessors, cupy_vertices)
+
+
+def bfs_with_predicates(ResourceHandle handle, _GPUGraph graph,
+                        sources, bool_t direction_optimizing, int32_t depth_limit,
+                        bool_t compute_predecessors, bool_t stop_on_first_target,
+                        bool_t do_expensive_check, include_vertices=None,
+                        exclude_vertices=None, target_vertices=None,
+                        include_edge_ids=None):
+    assert_CAI_type(sources, "sources")
+    assert_CAI_type(include_vertices, "include_vertices", True)
+    assert_CAI_type(exclude_vertices, "exclude_vertices", True)
+    assert_CAI_type(target_vertices, "target_vertices", True)
+    assert_CAI_type(include_edge_ids, "include_edge_ids", True)
+
+    if include_vertices is not None and exclude_vertices is not None:
+        raise ValueError("include_vertices and exclude_vertices are mutually exclusive")
+    if not all(has_vertex(handle, graph, sources, do_expensive_check)):
+        raise ValueError("one or more vertices are invalid. Call the method 'has_vertex' "
+                         "to identify the invalid vertices")
+    if depth_limit <= 0:
+        depth_limit = INT_MAX - 1
+
+    cdef cugraph_resource_handle_t* c_resource_handle_ptr = handle.c_resource_handle_ptr
+    cdef cugraph_graph_t* c_graph_ptr = graph.c_graph_ptr
+    cdef cugraph_error_code_t error_code
+    cdef cugraph_error_t* error_ptr
+    cdef cugraph_type_erased_device_array_view_t* sources_view_ptr = NULL
+    cdef cugraph_type_erased_device_array_view_t* include_vertices_view_ptr = NULL
+    cdef cugraph_type_erased_device_array_view_t* exclude_vertices_view_ptr = NULL
+    cdef cugraph_type_erased_device_array_view_t* target_vertices_view_ptr = NULL
+    cdef cugraph_type_erased_device_array_view_t* include_edge_ids_view_ptr = NULL
+    cdef cugraph_paths_result_t* result_ptr = NULL
+    cdef cugraph_bfs_predicate_result_t* predicate_result_ptr = NULL
+    cdef cugraph_type_erased_device_array_view_t* distances_ptr
+    cdef cugraph_type_erased_device_array_view_t* predecessors_ptr
+    cdef cugraph_type_erased_device_array_view_t* vertices_ptr
+
+    try:
+        sources_view_ptr = create_cugraph_type_erased_device_array_view_from_py_obj(sources)
+        include_vertices_view_ptr = create_cugraph_type_erased_device_array_view_from_py_obj(include_vertices)
+        exclude_vertices_view_ptr = create_cugraph_type_erased_device_array_view_from_py_obj(exclude_vertices)
+        target_vertices_view_ptr = create_cugraph_type_erased_device_array_view_from_py_obj(target_vertices)
+        include_edge_ids_view_ptr = create_cugraph_type_erased_device_array_view_from_py_obj(include_edge_ids)
+        error_code = cugraph_bfs_with_predicates(
+            c_resource_handle_ptr, c_graph_ptr, sources_view_ptr,
+            include_vertices_view_ptr, exclude_vertices_view_ptr,
+            target_vertices_view_ptr, include_edge_ids_view_ptr,
+            direction_optimizing, depth_limit, compute_predecessors,
+            stop_on_first_target, do_expensive_check, &result_ptr,
+            &predicate_result_ptr, &error_ptr)
+        assert_success(error_code, error_ptr, "cugraph_bfs_with_predicates")
+        distances_ptr = cugraph_paths_result_get_distances(result_ptr)
+        predecessors_ptr = cugraph_paths_result_get_predecessors(result_ptr)
+        vertices_ptr = cugraph_paths_result_get_vertices(result_ptr)
+        cupy_distances = copy_to_cupy_array(c_resource_handle_ptr, distances_ptr)
+        cupy_predecessors = copy_to_cupy_array(c_resource_handle_ptr, predecessors_ptr)
+        cupy_vertices = copy_to_cupy_array(c_resource_handle_ptr, vertices_ptr)
+        if predicate_result_ptr != NULL:
+            target_info = {
+                "target_found": bool(cugraph_bfs_predicate_result_get_target_found(predicate_result_ptr)),
+                "target_distance": cugraph_bfs_predicate_result_get_target_distance(predicate_result_ptr),
+            }
+        else:
+            target_info = {"target_found": False, "target_distance": -1}
+    finally:
+        if result_ptr != NULL:
+            cugraph_paths_result_free(result_ptr)
+        if predicate_result_ptr != NULL:
+            cugraph_bfs_predicate_result_free(predicate_result_ptr)
+        if sources_view_ptr != NULL:
+            cugraph_type_erased_device_array_view_free(sources_view_ptr)
+        if include_vertices_view_ptr != NULL:
+            cugraph_type_erased_device_array_view_free(include_vertices_view_ptr)
+        if exclude_vertices_view_ptr != NULL:
+            cugraph_type_erased_device_array_view_free(exclude_vertices_view_ptr)
+        if target_vertices_view_ptr != NULL:
+            cugraph_type_erased_device_array_view_free(target_vertices_view_ptr)
+        if include_edge_ids_view_ptr != NULL:
+            cugraph_type_erased_device_array_view_free(include_edge_ids_view_ptr)
+
+    return (cupy_distances, cupy_predecessors, cupy_vertices, target_info)
