@@ -39,6 +39,8 @@ rapids_cmake_build_type(Release)
 
 option(BUILD_SHARED_LIBS "Build cuGraph shared libraries" ON)
 option(BUILD_CUGRAPH_MG_TESTS "Build cuGraph multigpu algorithm tests" OFF)
+option(BUILD_CUGRAPH_EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION
+       "Build the manual GPU calibration for edgelist sort workspace preflight" OFF)
 option(CMAKE_CUDA_LINEINFO "Enable the -lineinfo option for nvcc (useful for cuda-memcheck / profiler" OFF)
 option(BUILD_TESTS "Configure CMake to build tests" ON)
 option(USE_RAFT_STATIC "Build raft as a static library" OFF)
@@ -699,6 +701,7 @@ add_library(cugraph_c
         src/c_api/decompress_to_edgelist.cpp
         src/c_api/edgelist.cpp
         src/c_api/side_input_workspace_preflight.cpp
+        src/c_api/edgelist_sort_workspace_preflight.cu
         src/c_api/renumber_arbitrary_edgelist.cu
         src/c_api/legacy_fa2.cpp
         src/c_api/legacy_mst.cpp

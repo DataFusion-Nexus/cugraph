@@ -466,6 +466,43 @@ CUGRAPH_EXPORT cugraph_error_code_t cugraph_personalized_pagerank_side_input_wor
   size_t* workspace_bytes_out,
   cugraph_error_t** error);
 
+/**
+ * @brief Return host-computed upper bounds for SG graph-construction workspace.
+ *
+ * The endpoint and edge types must both be INT32 or both be INT64. If edge weights are present,
+ * @p weight_type must be FLOAT32 or FLOAT64. No device allocation or resource handle is required.
+ * The renumber result covers both whole-input and memory-frugal unique/sort paths. The compression
+ * result covers every real edgelist sort branch. Admission has neither the device-derived branch
+ * thresholds nor the input distribution, so each result is the maximum of those branches.
+ *
+ * @param[in] vertex_type             Endpoint data type
+ * @param[in] edge_type               Graph edge-offset data type
+ * @param[in] has_edge_weights        Whether the input has one weight per edge
+ * @param[in] weight_type             Weight data type when @p has_edge_weights is TRUE
+ * @param[in] has_edge_ids            Whether the input has one edge-id property per edge
+ * @param[in] store_transposed        Requested graph storage orientation
+ * @param[in] renumber                Whether graph construction renumbers external vertex IDs
+ * @param[in] num_edges               Number of input edges
+ * @param[in] num_vertices            Upper bound on distinct vertices
+ * @param[out] renumber_workspace_bytes_out Upper bound beyond the owned input edge columns
+ * @param[out] compression_workspace_bytes_out Upper bound for sort-and-compress temporary storage
+ * @param[out] error                  Error details on failure
+ * @return error code
+ */
+CUGRAPH_EXPORT cugraph_error_code_t cugraph_graph_construction_workspace_preflight(
+  cugraph_data_type_id_t vertex_type,
+  cugraph_data_type_id_t edge_type,
+  bool_t has_edge_weights,
+  cugraph_data_type_id_t weight_type,
+  bool_t has_edge_ids,
+  bool_t store_transposed,
+  bool_t renumber,
+  size_t num_edges,
+  size_t num_vertices,
+  size_t* renumber_workspace_bytes_out,
+  size_t* compression_workspace_bytes_out,
+  cugraph_error_t** error);
+
 #include <cugraph_c/export.h>
 
 #ifdef __cplusplus

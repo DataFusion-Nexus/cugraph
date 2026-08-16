@@ -660,5 +660,312 @@ void sort_adjacency_list(raft::handle_t const& handle,
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// Graph-construction workspace preflight owners (Nexus 26.08 port).
+// Every term below is derived from an allocation owner in this file or in
+// renumber_edgelist_impl.cuh / mem_frugal_partition.cuh / mask_utils.cuh, and
+// is validated against recorded allocation events in
+// tests/structure/edgelist_sort_workspace_preflight_test.cu.
+
+template <typename T>
+struct workspace_preflight_never_select {
+  __host__ __device__ bool operator()(T const&) const { return false; }
+};
+
+template <typename T>
+struct workspace_preflight_count_element {
+  __host__ __device__ int64_t operator()(T const&) const { return int64_t{0}; }
+};
+
+inline size_t checked_workspace_add(size_t lhs, size_t rhs)
+{
+  if (lhs > std::numeric_limits<size_t>::max() - rhs) {
+    throw std::overflow_error("graph construction workspace bound overflows size_t");
+  }
+  return lhs + rhs;
+}
+
+inline size_t checked_workspace_multiply(size_t lhs, size_t rhs)
+{
+  if ((lhs != 0) && (rhs > std::numeric_limits<size_t>::max() / lhs)) {
+    throw std::overflow_error("graph construction workspace bound overflows size_t");
+  }
+  return lhs * rhs;
+}
+
+template <typename T>
+constexpr size_t workspace_element_size()
+{
+  if constexpr (std::is_arithmetic_v<T>) {
+    return sizeof(T);
+  } else {
+    static_assert(is_thrust_tuple_of_arithmetic<T>::value);
+    return sum_thrust_tuple_element_sizes<T>(
+      std::make_index_sequence<cuda::std::tuple_size<T>::value>{});
+  }
+}
+
+inline void check_workspace_query(cudaError_t status)
+{
+  if (status != cudaSuccess) {
+    throw std::runtime_error("CUB failed to query graph construction workspace");
+  }
+}
+
+inline size_t aligned_workspace_bytes(size_t bytes, size_t alignment)
+{
+  if (bytes == 0) { return 0; }
+  return checked_workspace_multiply(
+    checked_workspace_add(bytes, alignment - size_t{1}) / alignment, alignment);
+}
+
+template <typename key_t>
+size_t radix_sort_keys_workspace_bytes(size_t count)
+{
+  cub::DoubleBuffer<key_t> keys{nullptr, nullptr};
+  size_t cub_workspace_bytes{0};
+  check_workspace_query(cub::DeviceRadixSort::SortKeys(static_cast<void*>(nullptr),
+                                                        cub_workspace_bytes,
+                                                        keys,
+                                                        count,
+                                                        0,
+                                                        static_cast<int>(sizeof(key_t) * 8),
+                                                        nullptr));
+  auto const alternate_keys =
+    aligned_workspace_bytes(checked_workspace_multiply(count, sizeof(key_t)), 128);
+  return checked_workspace_add(alternate_keys, cub_workspace_bytes);
+}
+
+template <typename key_t, typename value_t>
+size_t radix_sort_pairs_workspace_bytes(size_t count)
+{
+  cub::DoubleBuffer<key_t> keys{nullptr, nullptr};
+  cub::DoubleBuffer<value_t> values{nullptr, nullptr};
+  size_t cub_workspace_bytes{0};
+  check_workspace_query(cub::DeviceRadixSort::SortPairs(static_cast<void*>(nullptr),
+                                                         cub_workspace_bytes,
+                                                         keys,
+                                                         values,
+                                                         count,
+                                                         0,
+                                                         static_cast<int>(sizeof(key_t) * 8),
+                                                         nullptr));
+  auto const alternate_keys =
+    aligned_workspace_bytes(checked_workspace_multiply(count, sizeof(key_t)), 128);
+  auto const alternate_values =
+    aligned_workspace_bytes(checked_workspace_multiply(count, sizeof(value_t)), 128);
+  return checked_workspace_add(
+    checked_workspace_add(alternate_keys, alternate_values), cub_workspace_bytes);
+}
+
+// renumber_edgelist workspace: find_uniques (whole or frugal path),
+// renumber-map construction, and degree-sorted vertex ordering.
+template <typename vertex_t, typename edge_t>
+size_t renumber_edgelist_workspace_upper_bound(size_t num_edges, size_t num_vertices)
+{
+  if (num_edges == 0) { return 0; }
+
+  auto const edge_vertices_bytes = checked_workspace_multiply(num_edges, sizeof(vertex_t));
+  auto const vertices_bytes      = checked_workspace_multiply(num_vertices, sizeof(vertex_t));
+  auto const whole_sort = checked_workspace_add(
+    checked_workspace_add(edge_vertices_bytes, vertices_bytes),
+    radix_sort_keys_workspace_bytes<vertex_t>(num_edges));
+
+  auto const half_edges       = checked_workspace_add(num_edges, size_t{1}) / size_t{2};
+  auto const half_edge_bytes  = checked_workspace_multiply(half_edges, sizeof(vertex_t));
+  auto const frugal_half_sort = checked_workspace_add(
+    checked_workspace_add(checked_workspace_multiply(vertices_bytes, size_t{2}),
+                          half_edge_bytes),
+    radix_sort_keys_workspace_bytes<vertex_t>(half_edges));
+  auto const frugal_merge = checked_workspace_multiply(vertices_bytes, size_t{5});
+
+  auto const degree_state = checked_workspace_multiply(
+    num_vertices, checked_workspace_add(sizeof(vertex_t), sizeof(edge_t)));
+  auto const degree_sort = checked_workspace_add(
+    degree_state, radix_sort_pairs_workspace_bytes<edge_t, vertex_t>(num_vertices));
+
+  return std::max({whole_sort, frugal_half_sort, frugal_merge, degree_sort});
+}
+
+template <typename KeyIterator>
+inline constexpr bool uses_thrust_merge_sort =
+  !CUB_NS_QUALIFIER::__can_use_radix_sort<
+    KeyIterator,
+    cuda::std::less<typename thrust::iterator_traits<KeyIterator>::value_type>>;
+
+template <typename KeyIterator>
+size_t merge_sort_workspace_bytes(KeyIterator key_first, size_t num_edges)
+{
+  using key_t     = typename thrust::iterator_traits<KeyIterator>::value_type;
+  using compare_t = cuda::std::less<key_t>;
+
+  // Thrust's smart-sort dispatch sends these non-arithmetic zip keys to DeviceMergeSort. Keep
+  // this assertion beside the size query so a CCCL dispatch change cannot silently under-price it.
+  static_assert(uses_thrust_merge_sort<KeyIterator>);
+
+  size_t workspace_bytes{0};
+  check_workspace_query(cub::DeviceMergeSort::SortKeys(static_cast<void*>(nullptr),
+                                                        workspace_bytes,
+                                                        key_first,
+                                                        num_edges,
+                                                        compare_t{},
+                                                        nullptr));
+  return workspace_bytes;
+}
+
+template <typename KeyIterator, typename ValueIterator>
+size_t merge_sort_workspace_bytes(KeyIterator key_first,
+                                  ValueIterator value_first,
+                                  size_t num_edges)
+{
+  using key_t     = typename thrust::iterator_traits<KeyIterator>::value_type;
+  using compare_t = cuda::std::less<key_t>;
+
+  static_assert(uses_thrust_merge_sort<KeyIterator>);
+
+  size_t workspace_bytes{0};
+  check_workspace_query(cub::DeviceMergeSort::SortPairs(static_cast<void*>(nullptr),
+                                                         workspace_bytes,
+                                                         key_first,
+                                                         value_first,
+                                                         num_edges,
+                                                         compare_t{},
+                                                         nullptr));
+  return workspace_bytes;
+}
+
+// 26.08 mem_frugal_partition: a persistent packed mask (mark_entries), a
+// transform_reduce count, then per-component sequential temporary buffers
+// filled by copy_if over the mask bits. second_size is input-distribution
+// dependent, so admission prices it as num_edges.
+template <typename Iterator>
+size_t mem_frugal_partition_workspace_bytes(Iterator first, size_t num_edges)
+{
+  using value_t = typename thrust::iterator_traits<Iterator>::value_type;
+
+  if (num_edges > static_cast<size_t>(std::numeric_limits<int64_t>::max())) {
+    throw std::overflow_error("graph construction workspace item count exceeds CUB's int64 range");
+  }
+
+  auto const mask_bytes = checked_workspace_multiply(
+    checked_workspace_add(num_edges, size_t{31}) / size_t{32}, sizeof(uint32_t));
+
+  auto constexpr num_selected_bytes = sizeof(int64_t);
+  auto const cub_num_edges          = static_cast<int64_t>(num_edges);
+  auto const predicate              = workspace_preflight_never_select<value_t>{};
+
+  size_t count_workspace_bytes{0};
+  auto count_first =
+    cuda::make_transform_iterator(first, workspace_preflight_count_element<value_t>{});
+  check_workspace_query(cub::DeviceReduce::Reduce(static_cast<void*>(nullptr),
+                                                   count_workspace_bytes,
+                                                   count_first,
+                                                   static_cast<int64_t*>(nullptr),
+                                                   cub_num_edges,
+                                                   cuda::std::plus<int64_t>{},
+                                                   int64_t{0},
+                                                   nullptr));
+  count_workspace_bytes = checked_workspace_add(count_workspace_bytes, num_selected_bytes);
+
+  size_t copy_workspace_bytes{0};
+  check_workspace_query(cub::DeviceSelect::If(static_cast<void*>(nullptr),
+                                               copy_workspace_bytes,
+                                               first,
+                                               first,
+                                               static_cast<int64_t*>(nullptr),
+                                               cub_num_edges,
+                                               predicate,
+                                               nullptr));
+  copy_workspace_bytes = checked_workspace_add(copy_workspace_bytes, num_selected_bytes);
+
+  auto const component_buffer_bytes =
+    checked_workspace_multiply(num_edges, workspace_element_size<value_t>());
+
+  return checked_workspace_add(
+    mask_bytes,
+    std::max(count_workspace_bytes,
+             checked_workspace_add(component_buffer_bytes, copy_workspace_bytes)));
+}
+
+template <typename KeyIterator>
+size_t no_property_mem_frugal_workspace_upper_bound(KeyIterator key_first, size_t num_edges)
+{
+  auto const sort_workspace_bytes = merge_sort_workspace_bytes(key_first, num_edges);
+  auto const partition_workspace_bytes =
+    mem_frugal_partition_workspace_bytes(key_first, num_edges);
+
+  // The real no-property path makes three sequential partitions then sorts four sequential
+  // ranges; masks and component buffers are released at each partition's end and each sort
+  // releases its workspace before the next. Every partition and range can contain all edges.
+  return std::max(sort_workspace_bytes, partition_workspace_bytes);
+}
+
+template <typename KeyIterator, typename ValueIterator>
+size_t property_mem_frugal_workspace_upper_bound(KeyIterator key_first,
+                                                  ValueIterator value_first,
+                                                  size_t num_edges)
+{
+  using key_t   = typename thrust::iterator_traits<KeyIterator>::value_type;
+  using value_t = typename thrust::iterator_traits<ValueIterator>::value_type;
+
+  auto const sort_workspace_bytes =
+    merge_sort_workspace_bytes(key_first, value_first, num_edges);
+  // The KV overload partitions the key components and the value column sequentially, so the
+  // component buffer peak is the widest single component, not their sum.
+  auto const partition_workspace_bytes = std::max(
+    mem_frugal_partition_workspace_bytes(key_first, num_edges),
+    mem_frugal_partition_workspace_bytes(value_first, num_edges));
+
+  return std::max(sort_workspace_bytes, partition_workspace_bytes);
+}
+
+template <typename vertex_t>
+size_t no_property_mem_frugal_workspace_upper_bound(size_t num_edges)
+{
+  auto key_first = thrust::make_zip_iterator(static_cast<vertex_t*>(nullptr),
+                                              static_cast<vertex_t*>(nullptr));
+  auto workspace = no_property_mem_frugal_workspace_upper_bound(key_first, num_edges);
+
+  if constexpr (sizeof(vertex_t) == sizeof(int64_t)) {
+    // The 64-bit no-property path uses a uint32_t major-offset key when the vertex range fits.
+    // The C ABI has no vertex-range input, so cover that real alternative as well.
+    auto compact_key_first = thrust::make_zip_iterator(static_cast<uint32_t*>(nullptr),
+                                                        static_cast<vertex_t*>(nullptr));
+    workspace = std::max(
+      workspace, no_property_mem_frugal_workspace_upper_bound(compact_key_first, num_edges));
+  }
+
+  return workspace;
+}
+
+template <typename vertex_t, typename edge_t>
+size_t sort_and_compress_edgelist_workspace_upper_bound(size_t num_edges,
+                                                         size_t mem_frugal_threshold)
+{
+  if (num_edges > mem_frugal_threshold) {
+    return no_property_mem_frugal_workspace_upper_bound<vertex_t>(num_edges);
+  }
+  auto key_first = thrust::make_zip_iterator(static_cast<vertex_t*>(nullptr),
+                                              static_cast<vertex_t*>(nullptr));
+  return merge_sort_workspace_bytes(key_first, num_edges);
+}
+
+template <typename vertex_t, typename edge_t, typename edge_value_t>
+size_t sort_and_compress_edgelist_workspace_upper_bound(size_t num_edges,
+                                                         size_t mem_frugal_threshold)
+{
+  if (num_edges > mem_frugal_threshold) {
+    auto key_first   = thrust::make_zip_iterator(static_cast<vertex_t*>(nullptr),
+                                                  static_cast<vertex_t*>(nullptr));
+    auto value_first = static_cast<edge_value_t*>(nullptr);
+    return property_mem_frugal_workspace_upper_bound(key_first, value_first, num_edges);
+  }
+  auto key_first = thrust::make_zip_iterator(static_cast<vertex_t*>(nullptr),
+                                              static_cast<vertex_t*>(nullptr));
+  return merge_sort_workspace_bytes(key_first, static_cast<edge_value_t*>(nullptr), num_edges);
+}
+
+
 }  // namespace detail
 }  // namespace cugraph
