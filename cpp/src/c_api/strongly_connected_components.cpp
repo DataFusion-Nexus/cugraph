@@ -61,6 +61,12 @@ struct scc_functor : public cugraph::c_api::abstract_functor {
       auto number_map = reinterpret_cast<rmm::device_uvector<vertex_t>*>(graph_->number_map_);
 
       auto graph_view = graph->view();
+      if (graph_view.is_symmetric()) {
+        mark_error(CUGRAPH_INVALID_INPUT,
+                   "Invalid input argument: call weakly_connected_components instead for "
+                   "symmetric graphs.");
+        return;
+      }
 
       auto components = cugraph::strongly_connected_components<vertex_t, edge_t, multi_gpu>(
         handle_, graph_view, do_expensive_check_);

@@ -167,6 +167,18 @@ if hasArg --pydevelop; then
     PYTHON_ARGS_FOR_INSTALL+=(-e)
 fi
 
+function cmakeBuild {
+    local build_dir=$1
+    shift
+
+    local build_args=("-j${PARALLEL_LEVEL}" "$@")
+    if [[ -n "${VERBOSE_FLAG}" ]]; then
+        build_args+=("${VERBOSE_FLAG}")
+    fi
+
+    cmake --build "${build_dir}" "${build_args[@]}"
+}
+
 SKBUILD_EXTRA_CMAKE_ARGS="${EXTRA_CMAKE_ARGS}"
 
 # Replace spaces with semicolons in SKBUILD_EXTRA_CMAKE_ARGS
@@ -247,7 +259,7 @@ if buildDefault || hasArg libcugraph || hasArg all; then
               "${CMAKE_VERBOSE_OPTION[@]}" \
               ${EXTRA_CMAKE_ARGS}
 
-        cmake --build "${LIBCUGRAPH_BUILD_DIR}" "-j${PARALLEL_LEVEL}" "${INSTALL_TARGET[@]}" "${VERBOSE_FLAG}"
+        cmakeBuild "${LIBCUGRAPH_BUILD_DIR}" "${INSTALL_TARGET[@]}"
     fi
 fi
 
@@ -279,7 +291,7 @@ if buildDefault || hasArg libcugraph_etl || hasArg all; then
               "${CMAKE_GENERATOR_OPTION[@]}" \
               "${CMAKE_VERBOSE_OPTION[@]}" \
               "${REPODIR}/cpp/libcugraph_etl"
-        cmake --build "${LIBCUGRAPH_ETL_BUILD_DIR}" "-j${PARALLEL_LEVEL}" "${INSTALL_TARGET[@]}" "${VERBOSE_FLAG}"
+        cmakeBuild "${LIBCUGRAPH_ETL_BUILD_DIR}" "${INSTALL_TARGET[@]}"
     fi
 fi
 
@@ -322,7 +334,7 @@ if hasArg docs || hasArg all; then
     fi
 
     cd "${LIBCUGRAPH_BUILD_DIR}"
-    cmake --build "${LIBCUGRAPH_BUILD_DIR}" "-j${PARALLEL_LEVEL}" --target docs_cugraph ${VERBOSE_FLAG}
+    cmakeBuild "${LIBCUGRAPH_BUILD_DIR}" --target docs_cugraph
 
     echo "making libcugraph doc dir"
     rm -rf "${REPODIR}/docs/cugraph/libcugraph"
