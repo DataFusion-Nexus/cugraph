@@ -532,6 +532,17 @@ TEST(ConstructionPreflightContract, ValidationAndZeroing)
   EXPECT_EQ(outs.compression_bytes, sizeof(int32_t));
 }
 
+TEST(ConstructionPreflightContract, FrugalBoundPlusOffsetsOverflowIsRejected)
+{
+  cugraph_error_code_t status = CUGRAPH_SUCCESS;
+  // offsets near SIZE_MAX plus a nonzero frugal branch bound must overflow
+  // into INVALID_INPUT, never wrap into a smaller bound.
+  auto outs = call_construction_preflight(INT64, INT64, FALSE, FLOAT32, FALSE, FALSE, TRUE,
+                                          16, std::numeric_limits<size_t>::max() / 4, &status);
+  EXPECT_EQ(status, CUGRAPH_INVALID_INPUT);
+  EXPECT_EQ(outs.compression_bytes, 0u);
+}
+
 TEST(ConstructionPreflightContract, RenumberOffSuppressesRenumberBound)
 {
   cugraph_error_code_t status = CUGRAPH_SUCCESS;

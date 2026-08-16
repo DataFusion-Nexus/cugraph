@@ -176,6 +176,19 @@ TEST(BfsSideInputPreflight, ExactFormulaValues)
   EXPECT_EQ(outs.predicate_bitmaps, 32u);
 }
 
+TEST(BfsSideInputPreflight, VertexStageOverflowIsRejected)
+{
+  cugraph_error_code_t status = CUGRAPH_SUCCESS;
+  // source copy + role copy + target copy + bitmaps must not wrap: huge rows
+  // on three roles at once overflow the vertex stage addition.
+  auto outs = call_bfs_preflight(INT64, INT64, 8, 16, TRUE,
+                                 std::numeric_limits<size_t>::max() / 12, TRUE,
+                                 std::numeric_limits<size_t>::max() / 12, FALSE, 0, TRUE,
+                                 std::numeric_limits<size_t>::max() / 12, FALSE, 0, &status);
+  EXPECT_EQ(status, CUGRAPH_INVALID_INPUT);
+  EXPECT_EQ(outs.workspace, 0u);
+}
+
 TEST(BfsSideInputPreflight, DuplicatesAndAbsenceAreAccountedByRows)
 {
   cugraph_error_code_t status = CUGRAPH_SUCCESS;

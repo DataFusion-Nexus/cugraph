@@ -189,7 +189,9 @@ extern "C" CUGRAPH_EXPORT cugraph_error_code_t cugraph_bfs_side_input_workspace_
   if (!checked_add(target_bitmap_term, target_copy_term, &temporary)) {
     return fail(error, CUGRAPH_INVALID_INPUT, "BFS vertex predicate workspace overflows size_t");
   }
-  vertex_stage += std::max(role_copy, temporary);
+  if (!checked_add(std::max(role_copy, temporary), vertex_stage, &vertex_stage)) {
+    return fail(error, CUGRAPH_INVALID_INPUT, "BFS vertex predicate workspace overflows size_t");
+  }
 
   size_t retained_pre_edge = 0;
   if (!checked_add(role_bitmap, target_bitmap_term, &retained_pre_edge) ||

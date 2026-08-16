@@ -108,8 +108,9 @@ size_t workspace_upper_bound(bool has_edge_weights,
     branch_upper_bound<vertex_t, edge_t>(
       has_edge_weights, weight_type, has_edge_ids, num_edges, std::numeric_limits<size_t>::max()));
   auto const mem_frugal_bound =
-    offsets_bytes +
-    branch_upper_bound<vertex_t, edge_t>(has_edge_weights, weight_type, has_edge_ids, num_edges, 0);
+    cugraph::detail::checked_workspace_add(
+      offsets_bytes,
+      branch_upper_bound<vertex_t, edge_t>(has_edge_weights, weight_type, has_edge_ids, num_edges, 0));
   return std::max(whole_sort_bound, mem_frugal_bound);
 }
 
