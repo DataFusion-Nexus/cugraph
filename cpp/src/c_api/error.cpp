@@ -17,6 +17,15 @@ extern "C" const char* cugraph_error_message(const cugraph_error_t* error)
   }
 }
 
+extern "C" cugraph_allocation_source_t cugraph_error_allocation_source(const cugraph_error_t* error)
+{
+  if (error != nullptr) {
+    auto internal_pointer = reinterpret_cast<cugraph::c_api::cugraph_error_t const*>(error);
+    return internal_pointer->allocation_source_;
+  }
+  return CUGRAPH_ALLOCATION_SOURCE_UNKNOWN;
+}
+
 extern "C" void cugraph_error_free(cugraph_error_t* error)
 {
   if (error != nullptr) {

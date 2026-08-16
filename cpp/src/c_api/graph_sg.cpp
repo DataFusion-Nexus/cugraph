@@ -21,7 +21,10 @@
 
 #include <rmm/exec_policy.hpp>
 
+#include <rmm/error.hpp>
+
 #include <limits>
+#include <new>
 
 namespace {
 
@@ -824,6 +827,15 @@ extern "C" cugraph_error_code_t cugraph_graph_create_sg(
     }
 
     *graph = reinterpret_cast<cugraph_graph_t*>(functor.result_);
+  } catch (rmm::out_of_memory const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (rmm::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
   } catch (std::exception const& ex) {
     *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
     return CUGRAPH_UNKNOWN_ERROR;
@@ -978,6 +990,15 @@ cugraph_error_code_t cugraph_graph_create_with_times_sg(
     }
 
     *graph = reinterpret_cast<cugraph_graph_t*>(functor.result_);
+  } catch (rmm::out_of_memory const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (rmm::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
   } catch (std::exception const& ex) {
     *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
     return CUGRAPH_UNKNOWN_ERROR;
@@ -1086,6 +1107,15 @@ cugraph_error_code_t cugraph_graph_create_sg_from_csr(
     }
 
     *graph = reinterpret_cast<cugraph_graph_t*>(functor.result_);
+  } catch (rmm::out_of_memory const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (rmm::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
+  } catch (std::bad_alloc const& ex) {
+    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
+    return CUGRAPH_ALLOC_ERROR;
   } catch (std::exception const& ex) {
     *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
     return CUGRAPH_UNKNOWN_ERROR;

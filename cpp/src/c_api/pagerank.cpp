@@ -138,14 +138,19 @@ struct pagerank_functor : public cugraph::c_api::abstract_functor {
         //
         // Need to renumber personalization_vertices
         //
-        cugraph::renumber_local_ext_vertices<vertex_t, multi_gpu>(
-          handle_,
-          personalization_vertices.data(),
-          personalization_vertices.size(),
-          number_map->data(),
-          graph_view.local_vertex_partition_range_first(),
-          graph_view.local_vertex_partition_range_last(),
-          do_expensive_check_);
+        try {
+          cugraph::renumber_local_ext_vertices<vertex_t, multi_gpu>(
+            handle_,
+            personalization_vertices.data(),
+            personalization_vertices.size(),
+            number_map->data(),
+            graph_view.local_vertex_partition_range_first(),
+            graph_view.local_vertex_partition_range_last(),
+            do_expensive_check_);
+        } catch (cugraph::logic_error const& ex) {
+          mark_error(CUGRAPH_INVALID_INPUT, ex.what());
+          return;
+        }
       }
 
       rmm::device_uvector<weight_t> precomputed_vertex_out_weight_sums(0, handle_.get_stream());
@@ -164,16 +169,21 @@ struct pagerank_functor : public cugraph::c_api::abstract_functor {
                    precomputed_vertex_out_weight_sums_->size_,
                    handle_.get_stream());
 
-        precomputed_vertex_out_weight_sums = cugraph::detail::
-          collect_local_vertex_values_from_ext_vertex_value_pairs<vertex_t, weight_t, multi_gpu>(
-            handle_,
-            std::move(precomputed_vertex_out_weight_vertices),
-            std::move(precomputed_vertex_out_weight_sums),
-            *number_map,
-            graph_view.local_vertex_partition_range_first(),
-            graph_view.local_vertex_partition_range_last(),
-            weight_t{0},
-            do_expensive_check_);
+        try {
+          precomputed_vertex_out_weight_sums = cugraph::detail::
+            collect_local_vertex_values_from_ext_vertex_value_pairs<vertex_t, weight_t, multi_gpu>(
+              handle_,
+              std::move(precomputed_vertex_out_weight_vertices),
+              std::move(precomputed_vertex_out_weight_sums),
+              *number_map,
+              graph_view.local_vertex_partition_range_first(),
+              graph_view.local_vertex_partition_range_last(),
+              weight_t{0},
+              do_expensive_check_);
+        } catch (cugraph::logic_error const& ex) {
+          mark_error(CUGRAPH_INVALID_INPUT, ex.what());
+          return;
+        }
       }
 
       if (initial_guess_values_ != nullptr) {
@@ -304,6 +314,7 @@ extern "C" cugraph_error_code_t cugraph_pagerank(
                            do_expensive_check);
 
   auto return_value = cugraph::c_api::run_algorithm(graph, functor, result, error);
+  if (return_value != CUGRAPH_SUCCESS) { return return_value; }
 
   CAPI_EXPECTS(cugraph_centrality_result_converged(*result) == bool_t::TRUE,
                CUGRAPH_UNKNOWN_ERROR,
@@ -454,6 +465,7 @@ extern "C" cugraph_error_code_t cugraph_personalized_pagerank(
                            do_expensive_check);
 
   auto return_value = cugraph::c_api::run_algorithm(graph, functor, result, error);
+  if (return_value != CUGRAPH_SUCCESS) { return return_value; }
 
   CAPI_EXPECTS(cugraph_centrality_result_converged(*result) == bool_t::TRUE,
                CUGRAPH_UNKNOWN_ERROR,

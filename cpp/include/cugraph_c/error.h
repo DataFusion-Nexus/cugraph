@@ -23,6 +23,13 @@ typedef enum cugraph_error_code_ {
   CUGRAPH_UNSUPPORTED_TYPE_COMBINATION
 } cugraph_error_code_t;
 
+typedef enum cugraph_allocation_source_ {
+  CUGRAPH_ALLOCATION_SOURCE_UNKNOWN = 0,
+  CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY,
+  CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC,
+  CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC
+} cugraph_allocation_source_t;
+
 typedef struct cugraph_error_ {
   int32_t align_;
 } cugraph_error_t;
@@ -34,6 +41,8 @@ typedef struct cugraph_error_ {
  * @return a C-style string that provides detail for the error
  */
 CUGRAPH_EXPORT const char* cugraph_error_message(const cugraph_error_t* error);
+CUGRAPH_EXPORT cugraph_allocation_source_t cugraph_error_allocation_source(
+  const cugraph_error_t* error);
 
 /**
  * @brief    Destroy an error message

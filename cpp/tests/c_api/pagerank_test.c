@@ -6,6 +6,7 @@
 #include "c_test_utils.h" /* RUN_TEST */
 
 #include <cugraph_c/algorithms.h>
+#include <cugraph_c/array.h>
 #include <cugraph_c/graph.h>
 
 #include <math.h>
@@ -13,6 +14,47 @@
 typedef int32_t vertex_t;
 typedef int32_t edge_t;
 typedef float weight_t;
+
+typedef struct {
+  cugraph_type_erased_device_array_t* vertices;
+  cugraph_type_erased_device_array_t* values;
+  cugraph_type_erased_device_array_view_t* vertices_view;
+  cugraph_type_erased_device_array_view_t* values_view;
+} vertex_weight_input_t;
+
+int create_vertex_weight_input(const cugraph_resource_handle_t* p_handle,
+                               vertex_t* h_vertices,
+                               weight_t* h_values,
+                               size_t size,
+                               vertex_weight_input_t* input,
+                               cugraph_error_t** ret_error)
+{
+  int test_ret_value = 0;
+  cugraph_error_code_t ret_code;
+  ret_code = cugraph_type_erased_device_array_create(
+    p_handle, size, INT32, &input->vertices, ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "vertices create failed.");
+  ret_code = cugraph_type_erased_device_array_create(
+    p_handle, size, FLOAT32, &input->values, ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "values create failed.");
+  input->vertices_view = cugraph_type_erased_device_array_view(input->vertices);
+  input->values_view = cugraph_type_erased_device_array_view(input->values);
+  ret_code = cugraph_type_erased_device_array_view_copy_from_host(
+    p_handle, input->vertices_view, (byte_t*)h_vertices, ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "vertices copy failed.");
+  ret_code = cugraph_type_erased_device_array_view_copy_from_host(
+    p_handle, input->values_view, (byte_t*)h_values, ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "values copy failed.");
+  return test_ret_value;
+}
+
+void free_vertex_weight_input(vertex_weight_input_t* input)
+{
+  if (input->values_view != NULL) cugraph_type_erased_device_array_view_free(input->values_view);
+  if (input->vertices_view != NULL) cugraph_type_erased_device_array_view_free(input->vertices_view);
+  if (input->values != NULL) cugraph_type_erased_device_array_free(input->values);
+  if (input->vertices != NULL) cugraph_type_erased_device_array_free(input->vertices);
+}
 
 int generic_pagerank_test(vertex_t* h_src,
                           vertex_t* h_dst,
@@ -479,6 +521,31 @@ int test_pagerank_non_convergence()
     h_src, h_dst, h_wgt, h_result, num_vertices, num_edges, TRUE, alpha, epsilon, max_iterations);
 }
 
+int test_pagerank_invalid_precomputed_vertices()
+{
+  int failed = 0;
+  cugraph_error_code_t code;
+  cugraph_error_t* error = NULL;
+  cugraph_resource_handle_t* handle = cugraph_create_resource_handle(NULL);
+  cugraph_graph_t* graph = NULL;
+  cugraph_centrality_result_t* result = NULL;
+  vertex_weight_input_t input = {NULL, NULL, NULL, NULL};
+  vertex_t src[] = {0, 1, 2}, dst[] = {1, 2, 0}, vertices[] = {999};
+  weight_t weights[] = {1.0f, 1.0f, 1.0f}, values[] = {1.0f};
+  code = create_test_graph(handle, src, dst, weights, 3, TRUE, FALSE, FALSE, &graph, &error);
+  TEST_ASSERT(failed, code == CUGRAPH_SUCCESS, "create_test_graph failed.");
+  failed |= create_vertex_weight_input(handle, vertices, values, 1, &input, &error);
+  code = cugraph_pagerank(handle, graph, input.vertices_view, input.values_view, NULL, NULL,
+                          0.85, 1.0e-6, 500, TRUE, &result, &error);
+  TEST_ASSERT(failed, code == CUGRAPH_INVALID_INPUT, "invalid precomputed vertex was accepted.");
+  TEST_ASSERT(failed, result == NULL, "invalid input returned a result.");
+  free_vertex_weight_input(&input);
+  cugraph_graph_free(graph);
+  cugraph_free_resource_handle(handle);
+  cugraph_error_free(error);
+  return failed;
+}
+
 int test_personalized_pagerank()
 {
   size_t num_edges    = 3;
@@ -543,6 +610,32 @@ int test_personalized_pagerank_non_convergence()
                                                           max_iterations);
 }
 
+int test_personalized_pagerank_invalid_personalization_vertices()
+{
+  int failed = 0;
+  cugraph_error_code_t code;
+  cugraph_error_t* error = NULL;
+  cugraph_resource_handle_t* handle = cugraph_create_resource_handle(NULL);
+  cugraph_graph_t* graph = NULL;
+  cugraph_centrality_result_t* result = NULL;
+  vertex_weight_input_t input = {NULL, NULL, NULL, NULL};
+  vertex_t src[] = {0, 1, 2}, dst[] = {1, 2, 0}, vertices[] = {999};
+  weight_t weights[] = {1.0f, 1.0f, 1.0f}, values[] = {1.0f};
+  code = create_test_graph(handle, src, dst, weights, 3, TRUE, FALSE, FALSE, &graph, &error);
+  TEST_ASSERT(failed, code == CUGRAPH_SUCCESS, "create_test_graph failed.");
+  failed |= create_vertex_weight_input(handle, vertices, values, 1, &input, &error);
+  code = cugraph_personalized_pagerank(handle, graph, NULL, NULL, NULL, NULL,
+                                       input.vertices_view, input.values_view,
+                                       0.85, 1.0e-6, 500, TRUE, &result, &error);
+  TEST_ASSERT(failed, code == CUGRAPH_INVALID_INPUT, "invalid personalization vertex was accepted.");
+  TEST_ASSERT(failed, result == NULL, "invalid input returned a result.");
+  free_vertex_weight_input(&input);
+  cugraph_graph_free(graph);
+  cugraph_free_resource_handle(handle);
+  cugraph_error_free(error);
+  return failed;
+}
+
 /******************************************************************************/
 
 int main(int argc, char** argv)
@@ -553,7 +646,9 @@ int main(int argc, char** argv)
   result |= RUN_TEST(test_pagerank_4);
   result |= RUN_TEST(test_pagerank_4_with_transpose);
   result |= RUN_TEST(test_pagerank_non_convergence);
+  result |= RUN_TEST(test_pagerank_invalid_precomputed_vertices);
   result |= RUN_TEST(test_personalized_pagerank);
   result |= RUN_TEST(test_personalized_pagerank_non_convergence);
+  result |= RUN_TEST(test_personalized_pagerank_invalid_personalization_vertices);
   return result;
 }
