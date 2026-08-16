@@ -645,6 +645,8 @@ include(cmake/thirdparty/get_dlpack.cmake)
 ################################################################################
 # - C-API library --------------------------------------------------------------
 
+set_source_files_properties(src/c_api/side_input_workspace_preflight.cpp PROPERTIES LANGUAGE CUDA)
+
 add_library(cugraph_c
         src/c_api/resource_handle.cpp
         src/c_api/array.cpp
@@ -696,6 +698,7 @@ add_library(cugraph_c
         src/c_api/allgather.cpp
         src/c_api/decompress_to_edgelist.cpp
         src/c_api/edgelist.cpp
+        src/c_api/side_input_workspace_preflight.cpp
         src/c_api/renumber_arbitrary_edgelist.cu
         src/c_api/legacy_fa2.cpp
         src/c_api/legacy_mst.cpp

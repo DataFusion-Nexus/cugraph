@@ -419,6 +419,53 @@ CUGRAPH_EXPORT cugraph_error_code_t cugraph_graph_release_data_mask(cugraph_grap
  */
 CUGRAPH_EXPORT void cugraph_data_mask_destroy(cugraph_data_mask_t* mask);
 
+/**
+ * @brief Return the exact SG BFS side-input workspace peak.
+ *
+ * This host-only metadata query mirrors the allocations in
+ * `cugraph_bfs_with_predicates`: source/predicate vertex arrays are copied to
+ * owned device vectors, vertex predicates become packed bitmaps, and an edge
+ * predicate becomes a packed edge mask.  No CUDA context or allocation is
+ * touched.  A role is present only when its corresponding `has_*` flag is
+ * TRUE; this keeps an empty, present side input distinct from an absent one.
+ */
+CUGRAPH_EXPORT cugraph_error_code_t cugraph_bfs_side_input_workspace_preflight(
+  cugraph_data_type_id_t vertex_type,
+  cugraph_data_type_id_t edge_type,
+  size_t num_vertices,
+  size_t num_edges,
+  bool_t has_sources,
+  size_t source_rows,
+  bool_t has_include_vertices,
+  size_t include_vertices_rows,
+  bool_t has_exclude_vertices,
+  size_t exclude_vertices_rows,
+  bool_t has_target_vertices,
+  size_t target_vertices_rows,
+  bool_t has_include_edge_ids,
+  size_t include_edge_ids_rows,
+  size_t* source_copy_bytes_out,
+  size_t* predicate_bitmap_bytes_out,
+  size_t* edge_mask_bytes_out,
+  size_t* workspace_bytes_out,
+  cugraph_error_t** error);
+
+/**
+ * @brief Return the exact SG personalized PageRank side-input workspace peak.
+ *
+ * `pagerank.cpp` copies personalization vertex and value arrays into owned
+ * device vectors before invoking the algorithm.  This query reports those
+ * bytes without requiring a resource handle or allocating device memory.
+ */
+CUGRAPH_EXPORT cugraph_error_code_t cugraph_personalized_pagerank_side_input_workspace_preflight(
+  cugraph_data_type_id_t vertex_type,
+  cugraph_data_type_id_t weight_type,
+  bool_t has_personalization,
+  size_t personalization_rows,
+  size_t* copy_bytes_out,
+  size_t* workspace_bytes_out,
+  cugraph_error_t** error);
+
 #include <cugraph_c/export.h>
 
 #ifdef __cplusplus
