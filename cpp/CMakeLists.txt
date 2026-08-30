@@ -648,6 +648,7 @@ include(cmake/thirdparty/get_dlpack.cmake)
 # - C-API library --------------------------------------------------------------
 
 set_source_files_properties(src/c_api/side_input_workspace_preflight.cpp PROPERTIES LANGUAGE CUDA)
+set_source_files_properties(src/c_api/extract_paths.cpp PROPERTIES LANGUAGE CUDA)
 
 add_library(cugraph_c
         src/c_api/resource_handle.cpp

@@ -257,6 +257,43 @@ cugraph_extract_paths(const cugraph_resource_handle_t* handle,
                       cugraph_error_t** error);
 
 /**
+ * @brief     Query the single-GPU extract-paths allocation bound without allocating device memory
+ *
+ * The returned peak covers the destination and predecessor copies, SG
+ * renumber map, maximum-distance reduction, row-major path result, and
+ * frontier/position/compaction workspace allocated by cugraph_extract_paths.
+ * Source bytes are reported separately because the source array is borrowed
+ * by extract_paths and remains owned by the caller.
+ *
+ * @param [in] vertex_type Vertex type (INT32 or INT64)
+ * @param [in] source_count Number of source vertices retained by the caller
+ * @param [in] predecessor_count Number of predecessor rows
+ * @param [in] destination_count Number of requested destinations
+ * @param [in] max_path_length_upper_bound Hard upper bound on each path length
+ * @param [out] source_bytes_out Borrowed source-array bytes
+ * @param [out] destination_copy_bytes_out Owned destination-copy bytes
+ * @param [out] predecessor_copy_bytes_out Owned predecessor-copy bytes
+ * @param [out] path_output_bytes_out Owned row-major path-output bytes
+ * @param [out] workspace_bytes_out Maximum transient renumber/reduction/frontier workspace bytes
+ * @param [out] peak_bytes_out Peak additional owned bytes
+ * @param [out] error Error details on failure
+ * @return error code
+ */
+CUGRAPH_EXPORT cugraph_error_code_t
+cugraph_extract_paths_workspace_preflight(cugraph_data_type_id_t vertex_type,
+                                          size_t source_count,
+                                          size_t predecessor_count,
+                                          size_t destination_count,
+                                          size_t max_path_length_upper_bound,
+                                          size_t* source_bytes_out,
+                                          size_t* destination_copy_bytes_out,
+                                          size_t* predecessor_copy_bytes_out,
+                                          size_t* path_output_bytes_out,
+                                          size_t* workspace_bytes_out,
+                                          size_t* peak_bytes_out,
+                                          cugraph_error_t** error);
+
+/**
  * @brief     Get the max path length from extract_paths result
  *
  * @param [in]   result   The result from extract_paths
