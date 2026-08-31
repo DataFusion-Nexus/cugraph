@@ -222,6 +222,112 @@ int test_sssp_with_transpose_double()
     src, dst, wgt, 0, expected_distances, expected_predecessors, num_vertices, num_edges, 10, TRUE);
 }
 
+int test_unweighted_sssp()
+{
+  int test_ret_value                = 0;
+  cugraph_error_t* ret_error        = NULL;
+  cugraph_resource_handle_t* handle = cugraph_create_resource_handle(NULL);
+  cugraph_graph_t* graph            = NULL;
+  cugraph_paths_result_t* result    = NULL;
+  vertex_t src[]                    = {0, 1, 2};
+  vertex_t dst[]                    = {1, 2, 0};
+
+  TEST_ASSERT(test_ret_value, handle != NULL, "resource handle creation failed.");
+  cugraph_error_code_t ret_code = create_sg_test_graph(handle,
+                                                       INT32,
+                                                       INT32,
+                                                       src,
+                                                       dst,
+                                                       FLOAT32,
+                                                       NULL,
+                                                       INT32,
+                                                       NULL,
+                                                       INT32,
+                                                       NULL,
+                                                       INT32,
+                                                       NULL,
+                                                       NULL,
+                                                       3,
+                                                       FALSE,
+                                                       FALSE,
+                                                       FALSE,
+                                                       FALSE,
+                                                       &graph,
+                                                       &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "unweighted graph creation failed.");
+
+  size_t unit_weight_bytes = 0;
+  ret_code = cugraph_sssp_workspace_preflight(3, FLOAT32, FALSE, &unit_weight_bytes, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "SSSP preflight failed.");
+  TEST_ASSERT(
+    test_ret_value, unit_weight_bytes == 3 * sizeof(float), "SSSP preflight byte count mismatch.");
+
+  ret_code = cugraph_sssp(handle, graph, 0, FLT_MAX, TRUE, FALSE, &result, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "unweighted cugraph_sssp failed.");
+
+  cugraph_type_erased_device_array_view_t* vertices  = cugraph_paths_result_get_vertices(result);
+  cugraph_type_erased_device_array_view_t* distances = cugraph_paths_result_get_distances(result);
+  vertex_t h_vertices[3];
+  float h_distances[3];
+  ret_code = cugraph_type_erased_device_array_view_copy_to_host(
+    handle, (byte_t*)h_vertices, vertices, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "vertex copy_to_host failed.");
+  ret_code = cugraph_type_erased_device_array_view_copy_to_host(
+    handle, (byte_t*)h_distances, distances, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "distance copy_to_host failed.");
+  float expected[] = {0.0f, 1.0f, 2.0f};
+  for (int i = 0; i < 3 && test_ret_value == 0; ++i) {
+    TEST_ASSERT(test_ret_value,
+                nearlyEqual(expected[h_vertices[i]], h_distances[i], EPSILON),
+                "unweighted SSSP distances don't match");
+  }
+
+  cugraph_type_erased_device_array_view_free(vertices);
+  cugraph_type_erased_device_array_view_free(distances);
+  cugraph_paths_result_free(result);
+  cugraph_graph_free(graph);
+  cugraph_free_resource_handle(handle);
+  cugraph_error_free(ret_error);
+  return test_ret_value;
+}
+
+int test_sssp_workspace_preflight_rejects_overflow()
+{
+  int test_ret_value       = 0;
+  size_t unit_weight_bytes = 0;
+  cugraph_error_t* error   = NULL;
+  cugraph_error_code_t ret_code =
+    cugraph_sssp_workspace_preflight(SIZE_MAX, FLOAT64, FALSE, &unit_weight_bytes, &error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_INVALID_INPUT, "overflow must fail closed.");
+  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "failed preflight must clear output.");
+  cugraph_error_free(error);
+  return test_ret_value;
+}
+
+int test_sssp_workspace_preflight_boundaries()
+{
+  int test_ret_value       = 0;
+  size_t unit_weight_bytes = SIZE_MAX;
+  cugraph_error_t* error   = NULL;
+  cugraph_error_code_t ret_code =
+    cugraph_sssp_workspace_preflight(0, FLOAT32, FALSE, &unit_weight_bytes, &error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "zero-edge preflight failed.");
+  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "zero-edge preflight must return zero.");
+
+  ret_code = cugraph_sssp_workspace_preflight(3, FLOAT64, TRUE, &unit_weight_bytes, &error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "weighted preflight failed.");
+  TEST_ASSERT(
+    test_ret_value, unit_weight_bytes == 0, "weighted preflight must borrow graph weights.");
+
+  ret_code = cugraph_sssp_workspace_preflight(3, INT32, FALSE, &unit_weight_bytes, &error);
+  TEST_ASSERT(test_ret_value,
+              ret_code == CUGRAPH_UNSUPPORTED_TYPE_COMBINATION,
+              "unsupported weight dtype must fail closed.");
+  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "failed preflight must clear output.");
+  cugraph_error_free(error);
+  return test_ret_value;
+}
+
 /******************************************************************************/
 
 int main(int argc, char** argv)
@@ -230,5 +336,8 @@ int main(int argc, char** argv)
   result |= RUN_TEST(test_sssp);
   result |= RUN_TEST(test_sssp_with_transpose);
   result |= RUN_TEST(test_sssp_with_transpose_double);
+  result |= RUN_TEST(test_unweighted_sssp);
+  result |= RUN_TEST(test_sssp_workspace_preflight_rejects_overflow);
+  result |= RUN_TEST(test_sssp_workspace_preflight_boundaries);
   return result;
 }

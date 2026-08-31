@@ -28,4 +28,24 @@ template CUGRAPH_EXPORT rmm::device_uvector<double> eigenvector_centrality(
   size_t max_iterations,
   bool do_expensive_check);
 
+template CUGRAPH_EXPORT std::tuple<rmm::device_uvector<float>, centrality_algorithm_metadata_t>
+eigenvector_centrality_allow_nonconvergence(
+  raft::handle_t const& handle,
+  graph_view_t<int32_t, int32_t, true, false> const& graph_view,
+  std::optional<edge_property_view_t<int32_t, float const*>> edge_weight_view,
+  std::optional<raft::device_span<float const>> initial_centralities,
+  float epsilon,
+  size_t max_iterations,
+  bool do_expensive_check);
+
+template CUGRAPH_EXPORT std::tuple<rmm::device_uvector<double>, centrality_algorithm_metadata_t>
+eigenvector_centrality_allow_nonconvergence(
+  raft::handle_t const& handle,
+  graph_view_t<int32_t, int32_t, true, false> const& graph_view,
+  std::optional<edge_property_view_t<int32_t, double const*>> edge_weight_view,
+  std::optional<raft::device_span<double const>> initial_centralities,
+  double epsilon,
+  size_t max_iterations,
+  bool do_expensive_check);
+
 }  // namespace cugraph

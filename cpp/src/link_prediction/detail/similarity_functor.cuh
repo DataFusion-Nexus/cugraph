@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cuda/std/algorithm>
+#include <cuda/std/cmath>
 
 #include <limits>
 
@@ -57,7 +58,11 @@ struct cosine_functor_t {
                                     weight_t sum_of_product_of_a_and_b,
                                     weight_t reserved_param) const
   {
-    return sum_of_product_of_a_and_b / (norm_a * norm_b);
+    auto const denominator = norm_a * norm_b;
+    return cuda::std::abs(static_cast<double>(denominator)) <
+               double{2} / std::numeric_limits<double>::max()
+             ? weight_t{0}
+             : sum_of_product_of_a_and_b / denominator;
   }
 };
 

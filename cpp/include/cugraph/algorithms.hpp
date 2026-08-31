@@ -1487,6 +1487,17 @@ rmm::device_uvector<weight_t> eigenvector_centrality(
   size_t max_iterations   = 500,
   bool do_expensive_check = false);
 
+template <typename vertex_t, typename edge_t, typename weight_t, bool multi_gpu>
+std::tuple<rmm::device_uvector<weight_t>, centrality_algorithm_metadata_t>
+eigenvector_centrality_allow_nonconvergence(
+  raft::handle_t const& handle,
+  graph_view_t<vertex_t, edge_t, true, multi_gpu> const& graph_view,
+  std::optional<edge_property_view_t<edge_t, weight_t const*>> edge_weight_view,
+  std::optional<raft::device_span<weight_t const>> initial_centralities,
+  weight_t epsilon,
+  size_t max_iterations   = 500,
+  bool do_expensive_check = false);
+
 /**
 .* @ingroup link_analysis_cpp
  * @brief Compute HITS scores.

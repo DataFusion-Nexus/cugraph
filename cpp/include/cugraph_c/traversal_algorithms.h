@@ -149,6 +149,27 @@ cugraph_bfs(const cugraph_resource_handle_t* handle,
             cugraph_error_t** error);
 
 /**
+ * @brief Query the unit-weight buffer required by an SSSP call without allocating device memory
+ *
+ * Weighted SSSP borrows the graph's existing edge-weight property and reports zero additional
+ * bytes. Unweighted SSSP materializes one unit weight for each physical graph edge for the
+ * duration of the algorithm call.
+ *
+ * @param [in] edge_count Physical graph edge count or a hard upper bound used for admission
+ * @param [in] weight_type Graph weight type (FLOAT32 or FLOAT64)
+ * @param [in] has_edge_weights Whether the graph already owns an edge-weight property
+ * @param [out] unit_weight_bytes_out Additional unit-weight buffer bytes
+ * @param [out] error Error details on failure
+ * @return error code
+ */
+CUGRAPH_EXPORT cugraph_error_code_t
+cugraph_sssp_workspace_preflight(size_t edge_count,
+                                 cugraph_data_type_id_t weight_type,
+                                 bool_t has_edge_weights,
+                                 size_t* unit_weight_bytes_out,
+                                 cugraph_error_t** error);
+
+/**
  * @brief     Perform a breadth first search with optional edge, vertex, and target predicates.
  *
  * Vertex and target predicate inputs use external vertex IDs. Edge predicate input uses external
@@ -174,22 +195,22 @@ cugraph_bfs(const cugraph_resource_handle_t* handle,
  * @param [out] error        Pointer to an error object storing details of any error
  * @return error code
  */
-CUGRAPH_EXPORT cugraph_error_code_t cugraph_bfs_with_predicates(
-  const cugraph_resource_handle_t* handle,
-  cugraph_graph_t* graph,
-  cugraph_type_erased_device_array_view_t* sources,
-  const cugraph_type_erased_device_array_view_t* include_vertices,
-  const cugraph_type_erased_device_array_view_t* exclude_vertices,
-  const cugraph_type_erased_device_array_view_t* target_vertices,
-  const cugraph_type_erased_device_array_view_t* include_edge_ids,
-  bool_t direction_optimizing,
-  size_t depth_limit,
-  bool_t compute_predecessors,
-  bool_t stop_on_first_target,
-  bool_t do_expensive_check,
-  cugraph_paths_result_t** result,
-  cugraph_bfs_predicate_result_t** predicate_result,
-  cugraph_error_t** error);
+CUGRAPH_EXPORT cugraph_error_code_t
+cugraph_bfs_with_predicates(const cugraph_resource_handle_t* handle,
+                            cugraph_graph_t* graph,
+                            cugraph_type_erased_device_array_view_t* sources,
+                            const cugraph_type_erased_device_array_view_t* include_vertices,
+                            const cugraph_type_erased_device_array_view_t* exclude_vertices,
+                            const cugraph_type_erased_device_array_view_t* target_vertices,
+                            const cugraph_type_erased_device_array_view_t* include_edge_ids,
+                            bool_t direction_optimizing,
+                            size_t depth_limit,
+                            bool_t compute_predecessors,
+                            bool_t stop_on_first_target,
+                            bool_t do_expensive_check,
+                            cugraph_paths_result_t** result,
+                            cugraph_bfs_predicate_result_t** predicate_result,
+                            cugraph_error_t** error);
 
 /**
  * @brief     Perform single-source shortest-path to compute the minimum distances

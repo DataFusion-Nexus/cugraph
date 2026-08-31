@@ -33,7 +33,8 @@ namespace cugraph {
 namespace detail {
 
 template <typename vertex_t, typename edge_t, typename weight_t, bool multi_gpu>
-rmm::device_uvector<weight_t> eigenvector_centrality(
+std::tuple<rmm::device_uvector<weight_t>, centrality_algorithm_metadata_t>
+eigenvector_centrality_allow_nonconvergence(
   raft::handle_t const& handle,
   graph_view_t<vertex_t, edge_t, true, multi_gpu> const& pull_graph_view,
   std::optional<edge_property_view_t<edge_t, weight_t const*>> edge_weight_view,
@@ -44,7 +45,10 @@ rmm::device_uvector<weight_t> eigenvector_centrality(
 {
   using GraphViewType     = graph_view_t<vertex_t, edge_t, true, multi_gpu>;
   auto const num_vertices = pull_graph_view.number_of_vertices();
-  if (num_vertices == 0) { return rmm::device_uvector<weight_t>(0, handle.get_stream()); }
+  if (num_vertices == 0) {
+    return std::make_tuple(rmm::device_uvector<weight_t>(0, handle.get_stream()),
+                           centrality_algorithm_metadata_t{0, true});
+  }
 
   if (do_expensive_check) {
     if (edge_weight_view) {
@@ -145,20 +149,20 @@ rmm::device_uvector<weight_t> eigenvector_centrality(
 
     iter++;
 
-    if (diff_sum < (pull_graph_view.number_of_vertices() * epsilon)) {
-      break;
-    } else if (iter >= max_iterations) {
-      CUGRAPH_FAIL("Eigenvector Centrality failed to converge.");
+    if (diff_sum < (pull_graph_view.number_of_vertices() * epsilon)) { break; }
+    if (iter >= max_iterations) {
+      return std::make_tuple(std::move(centralities), centrality_algorithm_metadata_t{iter, false});
     }
   }
 
-  return centralities;
+  return std::make_tuple(std::move(centralities), centrality_algorithm_metadata_t{iter, true});
 }
 
 }  // namespace detail
 
 template <typename vertex_t, typename edge_t, typename weight_t, bool multi_gpu>
-rmm::device_uvector<weight_t> eigenvector_centrality(
+std::tuple<rmm::device_uvector<weight_t>, centrality_algorithm_metadata_t>
+eigenvector_centrality_allow_nonconvergence(
   raft::handle_t const& handle,
   graph_view_t<vertex_t, edge_t, true, multi_gpu> const& graph_view,
   std::optional<edge_property_view_t<edge_t, weight_t const*>> edge_weight_view,
@@ -178,13 +182,35 @@ rmm::device_uvector<weight_t> eigenvector_centrality(
                       static_cast<size_t>(graph_view.local_vertex_partition_range_size()),
                     "Centralities should be same size as vertex range");
 
-  return detail::eigenvector_centrality(handle,
-                                        graph_view,
-                                        edge_weight_view,
-                                        initial_centralities,
-                                        epsilon,
-                                        max_iterations,
-                                        do_expensive_check);
+  return detail::eigenvector_centrality_allow_nonconvergence(handle,
+                                                             graph_view,
+                                                             edge_weight_view,
+                                                             initial_centralities,
+                                                             epsilon,
+                                                             max_iterations,
+                                                             do_expensive_check);
+}
+
+template <typename vertex_t, typename edge_t, typename weight_t, bool multi_gpu>
+rmm::device_uvector<weight_t> eigenvector_centrality(
+  raft::handle_t const& handle,
+  graph_view_t<vertex_t, edge_t, true, multi_gpu> const& graph_view,
+  std::optional<edge_property_view_t<edge_t, weight_t const*>> edge_weight_view,
+  std::optional<raft::device_span<weight_t const>> initial_centralities,
+  weight_t epsilon,
+  size_t max_iterations,
+  bool do_expensive_check)
+{
+  auto [centralities, metadata] =
+    cugraph::eigenvector_centrality_allow_nonconvergence(handle,
+                                                         graph_view,
+                                                         edge_weight_view,
+                                                         initial_centralities,
+                                                         epsilon,
+                                                         max_iterations,
+                                                         do_expensive_check);
+  CUGRAPH_EXPECTS(metadata.converged_, "Eigenvector Centrality failed to converge.");
+  return centralities;
 }
 
 }  // namespace cugraph

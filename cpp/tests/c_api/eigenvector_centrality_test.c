@@ -116,6 +116,41 @@ int test_eigenvector_centrality_3971()
     h_src, h_dst, h_wgt, h_result, num_vertices, num_edges, TRUE, epsilon, max_iterations);
 }
 
+int test_eigenvector_centrality_allow_nonconvergence_metadata()
+{
+  int test_ret_value = 0;
+  vertex_t h_src[]   = {0, 1, 1, 2, 2, 2, 3, 4, 1, 3, 4, 0, 1, 3, 5, 5};
+  vertex_t h_dst[]   = {1, 3, 4, 0, 1, 3, 5, 5, 0, 1, 1, 2, 2, 2, 3, 4};
+  weight_t h_wgt[]   = {
+    0.1f, 2.1f, 1.1f, 5.1f, 3.1f, 4.1f, 7.2f, 3.2f, 0.1f, 2.1f, 1.1f, 5.1f, 3.1f, 4.1f, 7.2f, 3.2f};
+  cugraph_error_t* ret_error                 = NULL;
+  cugraph_graph_t* graph                     = NULL;
+  cugraph_centrality_result_t* result        = NULL;
+  cugraph_resource_handle_t* resource_handle = cugraph_create_resource_handle(NULL);
+  TEST_ASSERT(test_ret_value, resource_handle != NULL, "resource handle creation failed.");
+
+  cugraph_error_code_t ret_code = create_test_graph(
+    resource_handle, h_src, h_dst, h_wgt, 16, TRUE, FALSE, FALSE, &graph, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "create_test_graph failed.");
+
+  ret_code = cugraph_eigenvector_centrality_allow_nonconvergence(
+    resource_handle, graph, 1e-20, 1, FALSE, &result, &ret_error);
+  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, cugraph_error_message(ret_error));
+  TEST_ASSERT(test_ret_value, result != NULL, "allow-nonconvergence result is null.");
+  TEST_ASSERT(test_ret_value,
+              cugraph_centrality_result_converged(result) == FALSE,
+              "one-iteration solve unexpectedly converged.");
+  TEST_ASSERT(test_ret_value,
+              cugraph_centrality_result_get_num_iterations(result) == 1,
+              "iteration metadata differs from the configured bound.");
+
+  cugraph_centrality_result_free(result);
+  cugraph_graph_free(graph);
+  cugraph_free_resource_handle(resource_handle);
+  cugraph_error_free(ret_error);
+  return test_ret_value;
+}
+
 /******************************************************************************/
 
 int main(int argc, char** argv)
@@ -123,5 +158,6 @@ int main(int argc, char** argv)
   int result = 0;
   result |= RUN_TEST(test_eigenvector_centrality);
   result |= RUN_TEST(test_eigenvector_centrality_3971);
+  result |= RUN_TEST(test_eigenvector_centrality_allow_nonconvergence_metadata);
   return result;
 }
