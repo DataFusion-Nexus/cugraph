@@ -6,6 +6,7 @@
 #include "c_api/error.hpp"
 
 #include <cugraph_c/graph.h>
+#include <cugraph_c/layout_algorithms.h>
 
 #include <algorithm>
 #include <cuda_runtime_api.h>
@@ -81,6 +82,56 @@ bool radix_sort_workspace(size_t rows, size_t* result)
     0);
   if (status != cudaSuccess) { return false; }
   *result = bytes;
+  return true;
+}
+
+struct float_pair {
+  float first;
+  float second;
+};
+
+template <typename key_t, typename value_t>
+bool radix_sort_pairs_workspace(size_t rows, size_t* result)
+{
+  *result = 0;
+  if (rows == 0) { return true; }
+  size_t bytes = 0;
+  auto const status = cub::DeviceRadixSort::SortPairs(
+    nullptr,
+    bytes,
+    static_cast<key_t*>(nullptr),
+    static_cast<key_t*>(nullptr),
+    static_cast<value_t*>(nullptr),
+    static_cast<value_t*>(nullptr),
+    rows,
+    0,
+    sizeof(key_t) * 8,
+    0);
+  if (status != cudaSuccess) { return false; }
+  *result = bytes;
+  return true;
+}
+
+template <typename key_t, typename value_t>
+bool force_atlas2_sort_peak(size_t rows, size_t retained_before, size_t* copy_bytes, size_t* peak)
+{
+  size_t key_bytes = 0;
+  size_t value_bytes = 0;
+  size_t record_bytes = 0;
+  size_t sort_storage = 0;
+  size_t sort_aux = 0;
+  size_t stage = 0;
+  if (!checked_mul(rows, sizeof(key_t), &key_bytes) ||
+      !checked_mul(rows, sizeof(value_t), &value_bytes) ||
+      !checked_add(key_bytes, value_bytes, &record_bytes) ||
+      !radix_sort_pairs_workspace<key_t, value_t>(rows, &sort_storage) ||
+      !checked_add(record_bytes, sort_storage, &sort_aux) ||
+      !checked_add(retained_before, record_bytes, &stage) ||
+      !checked_add(stage, sort_aux, &stage)) {
+    return false;
+  }
+  *copy_bytes = record_bytes;
+  *peak       = stage;
   return true;
 }
 
@@ -255,5 +306,61 @@ extern "C" CUGRAPH_EXPORT cugraph_error_code_t cugraph_personalized_pagerank_sid
   }
   *copy_bytes_out     = total;
   *workspace_bytes_out = total;
+  return CUGRAPH_SUCCESS;
+}
+
+extern "C" CUGRAPH_EXPORT cugraph_error_code_t cugraph_force_atlas2_side_input_workspace_preflight(
+  cugraph_data_type_id_t vertex_type,
+  bool_t has_initial_positions,
+  size_t initial_position_rows,
+  bool_t has_radius,
+  bool_t has_mobility,
+  bool_t has_mass,
+  size_t vertex_attribute_rows,
+  size_t* copy_bytes_out,
+  size_t* workspace_bytes_out,
+  cugraph_error_t** error)
+{
+  if (error != nullptr) { *error = nullptr; }
+  if (copy_bytes_out != nullptr) { *copy_bytes_out = 0; }
+  if (workspace_bytes_out != nullptr) { *workspace_bytes_out = 0; }
+  if (error == nullptr || copy_bytes_out == nullptr || workspace_bytes_out == nullptr) {
+    return CUGRAPH_INVALID_INPUT;
+  }
+  if (!valid_index_type(vertex_type)) {
+    return fail(error, CUGRAPH_UNSUPPORTED_TYPE_COMBINATION,
+                "ForceAtlas2 side-input vertices must be INT32 or INT64");
+  }
+  if (!valid_bool(has_initial_positions) || !valid_bool(has_radius) ||
+      !valid_bool(has_mobility) || !valid_bool(has_mass)) {
+    return fail(error, CUGRAPH_INVALID_INPUT, "boolean input must be FALSE or TRUE");
+  }
+
+  size_t retained = 0;
+  size_t peak     = 0;
+  auto add_stage = [&](size_t rows, bool position_values) {
+    size_t copy = 0;
+    size_t stage = 0;
+    auto const valid = vertex_type == INT32
+                         ? (position_values
+                              ? force_atlas2_sort_peak<std::int32_t, float_pair>(rows, retained, &copy, &stage)
+                              : force_atlas2_sort_peak<std::int32_t, float>(rows, retained, &copy, &stage))
+                         : (position_values
+                              ? force_atlas2_sort_peak<std::int64_t, float_pair>(rows, retained, &copy, &stage)
+                              : force_atlas2_sort_peak<std::int64_t, float>(rows, retained, &copy, &stage));
+    if (!valid || !checked_add(retained, copy, &retained)) { return false; }
+    peak = std::max(peak, stage);
+    return true;
+  };
+
+  if ((has_initial_positions == TRUE && !add_stage(initial_position_rows, true)) ||
+      (has_radius == TRUE && !add_stage(vertex_attribute_rows, false)) ||
+      (has_mobility == TRUE && !add_stage(vertex_attribute_rows, false)) ||
+      (has_mass == TRUE && !add_stage(vertex_attribute_rows, false))) {
+    return fail(error, CUGRAPH_INVALID_INPUT,
+                "ForceAtlas2 side-input workspace byte count or sort query failed");
+  }
+  *copy_bytes_out      = retained;
+  *workspace_bytes_out = std::max(retained, peak);
   return CUGRAPH_SUCCESS;
 }
