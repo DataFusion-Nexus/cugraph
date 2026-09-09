@@ -8,6 +8,7 @@
 #include "c_api/graph.hpp"
 #include "c_api/random.hpp"
 #include "c_api/resource_handle.hpp"
+#include "c_api/result_factory.hpp"
 #include "c_api/utils.hpp"
 
 #include <cugraph_c/algorithms.h>
@@ -126,9 +127,9 @@ struct betweenness_centrality_functor : public cugraph::c_api::abstract_functor 
                                                handle_.get_stream());
       raft::copy(vertex_ids.data(), number_map->data(), vertex_ids.size(), handle_.get_stream());
 
-      result_ = new cugraph::c_api::cugraph_centrality_result_t{
-        new cugraph::c_api::cugraph_type_erased_device_array_t(vertex_ids, graph_->vertex_type_),
-        new cugraph::c_api::cugraph_type_erased_device_array_t(centralities, graph_->weight_type_)};
+      result_ = cugraph::c_api::result_factory::make_centrality_result(
+                  vertex_ids, centralities, graph_->vertex_type_, graph_->weight_type_)
+                  .release();
     }
   }
 };
@@ -245,14 +246,14 @@ struct edge_betweenness_centrality_functor : public cugraph::c_api::abstract_fun
                                       number_map->data(), number_map->size()})
                                   : std::nullopt);
 
-      result_ = new cugraph::c_api::cugraph_edge_centrality_result_t{
-        new cugraph::c_api::cugraph_type_erased_device_array_t(src_ids, graph_->vertex_type_),
-        new cugraph::c_api::cugraph_type_erased_device_array_t(dst_ids, graph_->vertex_type_),
-        output_edge_ids ? new cugraph::c_api::cugraph_type_erased_device_array_t(*output_edge_ids,
-                                                                                 graph_->edge_type_)
-                        : nullptr,
-        new cugraph::c_api::cugraph_type_erased_device_array_t(*output_centralities,
-                                                               graph_->weight_type_)};
+      result_ = cugraph::c_api::result_factory::make_edge_centrality_result(src_ids,
+                                                                            dst_ids,
+                                                                            output_edge_ids,
+                                                                            output_centralities,
+                                                                            graph_->vertex_type_,
+                                                                            graph_->edge_type_,
+                                                                            graph_->weight_type_)
+                  .release();
     }
   }
 };

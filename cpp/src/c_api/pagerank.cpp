@@ -7,6 +7,7 @@
 #include "c_api/centrality_result.hpp"
 #include "c_api/graph.hpp"
 #include "c_api/resource_handle.hpp"
+#include "c_api/result_factory.hpp"
 #include "c_api/utils.hpp"
 #include "detail/shuffle_wrappers.hpp"
 
@@ -248,11 +249,14 @@ struct pagerank_functor : public cugraph::c_api::abstract_functor {
                                                handle_.get_stream());
       raft::copy(vertex_ids.data(), number_map->data(), vertex_ids.size(), handle_.get_stream());
 
-      result_ = new cugraph::c_api::cugraph_centrality_result_t{
-        new cugraph::c_api::cugraph_type_erased_device_array_t(vertex_ids, graph_->vertex_type_),
-        new cugraph::c_api::cugraph_type_erased_device_array_t(pageranks, graph_->weight_type_),
-        metadata.number_of_iterations_,
-        metadata.converged_};
+      result_ =
+        cugraph::c_api::result_factory::make_centrality_result(vertex_ids,
+                                                               pageranks,
+                                                               graph_->vertex_type_,
+                                                               graph_->weight_type_,
+                                                               metadata.number_of_iterations_,
+                                                               metadata.converged_)
+          .release();
     }
   }
 };

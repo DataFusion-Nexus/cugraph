@@ -115,6 +115,35 @@ rapids_cpm_init()
 include(cmake/thirdparty/get_cccl.cmake)
 include(${rapids-cmake-dir}/cpm/rmm.cmake)
 rapids_cpm_rmm(BUILD_EXPORT_SET cugraph-exports)
+
+# The C API error boundary includes the cuDF Rust shim's attributed allocation
+# exception. Resolve that public header from the same canonical prefix as RMM so
+# the native build does not silently depend on a target-local include symlink.
+find_path(CUGRAPH_CUDF_RUST_INCLUDE_DIR
+    NAMES cudf_rust/error_boundary.hpp
+    HINTS "${rmm_ROOT}"
+    PATH_SUFFIXES include
+    NO_DEFAULT_PATH
+)
+if(NOT CUGRAPH_CUDF_RUST_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "The canonical cuDF install at '${rmm_ROOT}' does not export "
+        "include/cudf_rust/error_boundary.hpp. Install the cuDF Rust shim "
+        "public headers before configuring cuGraph."
+    )
+endif()
+foreach(CUGRAPH_CUDF_RUST_HEADER IN ITEMS error_boundary.hpp memory_resource.h)
+    set(CUGRAPH_CUDF_RUST_HEADER_PATH
+        "${CUGRAPH_CUDF_RUST_INCLUDE_DIR}/cudf_rust/${CUGRAPH_CUDF_RUST_HEADER}"
+    )
+    if(NOT EXISTS "${CUGRAPH_CUDF_RUST_HEADER_PATH}" OR IS_SYMLINK "${CUGRAPH_CUDF_RUST_HEADER_PATH}")
+        message(FATAL_ERROR
+            "The cuDF Rust shim header '${CUGRAPH_CUDF_RUST_HEADER_PATH}' must be a regular installed file; "
+            "target-local manual symlinks are not supported."
+        )
+    endif()
+endforeach()
+
 include(${rapids-cmake-dir}/cpm/cuco.cmake)
 rapids_cpm_cuco(BUILD_EXPORT_SET cugraph-exports)
 include(cmake/thirdparty/get_raft.cmake)
@@ -556,6 +585,7 @@ target_include_directories(cugraph_common
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+        "$<BUILD_INTERFACE:${CUGRAPH_CUDF_RUST_INCLUDE_DIR}>"
         "$<INSTALL_INTERFACE:include>"
 )
 

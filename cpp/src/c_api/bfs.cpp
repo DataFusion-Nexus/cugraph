@@ -11,6 +11,7 @@
 #include "c_api/graph_helper.hpp"
 #include "c_api/paths_result.hpp"
 #include "c_api/resource_handle.hpp"
+#include "c_api/result_factory.hpp"
 #include "c_api/utils.hpp"
 
 #include <cugraph_c/algorithms.h>
@@ -24,6 +25,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -274,10 +276,9 @@ struct bfs_functor : public abstract_functor {
                                                      do_expensive_check_);
       }
 
-      result_ = new cugraph_paths_result_t{
-        new cugraph_type_erased_device_array_t(vertex_ids, graph_->vertex_type_),
-        new cugraph_type_erased_device_array_t(distances, graph_->vertex_type_),
-        new cugraph_type_erased_device_array_t(predecessors, graph_->vertex_type_)};
+      result_ = cugraph::c_api::result_factory::make_paths_result(
+                  vertex_ids, distances, predecessors, graph_->vertex_type_)
+                  .release();
     }
   }
 };
@@ -466,16 +467,18 @@ struct bfs_predicate_functor : public abstract_functor {
                                                      do_expensive_check_);
       }
 
-      result_ = new cugraph_paths_result_t{
-        new cugraph_type_erased_device_array_t(vertex_ids, graph_->vertex_type_),
-        new cugraph_type_erased_device_array_t(distances, graph_->vertex_type_),
-        new cugraph_type_erased_device_array_t(predecessors, graph_->vertex_type_)};
-
+      std::unique_ptr<cugraph_bfs_predicate_result_t> predicate_result;
       if (return_predicate_result_) {
-        predicate_result_ =
-          new cugraph_bfs_predicate_result_t{predicate_metadata.target_found,
-                                             static_cast<size_t>(predicate_metadata.target_distance)};
+        predicate_result = cugraph::c_api::result_factory::make_bfs_predicate_result(
+          predicate_metadata.target_found,
+          static_cast<size_t>(predicate_metadata.target_distance));
       }
+
+      auto result = cugraph::c_api::result_factory::make_paths_result(
+        vertex_ids, distances, predecessors, graph_->vertex_type_);
+
+      predicate_result_ = predicate_result.release();
+      result_ = result.release();
     }
   }
 };

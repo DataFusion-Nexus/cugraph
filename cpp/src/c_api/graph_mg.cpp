@@ -10,6 +10,7 @@
 #include "c_api/graph.hpp"
 #include "c_api/graph_helper.hpp"
 #include "c_api/resource_handle.hpp"
+#include "c_api/utils.hpp"
 #include "cugraph/utilities/host_scalar_comm.hpp"
 #include "cugraph_c/types.h"
 
@@ -429,7 +430,7 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
 
   cugraph_data_type_id_t edge_type{vertex_type};
   cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
-  try {
+  auto const validation_status = cugraph::c_api::run_with_error_boundary([&]() {
     size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
                                                       local_num_edges,
                                                       raft::comms::op_t::SUM,
@@ -521,19 +522,9 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
     if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
       edge_type_id_type = cugraph_data_type_id_t::INT32;
     }
-  } catch (rmm::out_of_memory const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (rmm::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::exception const& ex) {
-    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
-    return CUGRAPH_UNKNOWN_ERROR;
-  }
+    return CUGRAPH_SUCCESS;
+  }, error);
+  if (validation_status != CUGRAPH_SUCCESS) { return validation_status; }
 
   //
   // Now we know enough to create the graph
@@ -554,7 +545,7 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
                                symmetrize,
                                do_expensive_check);
 
-  try {
+  return cugraph::c_api::run_with_error_boundary([&]() {
     cugraph::c_api::vertex_dispatcher(vertex_type,
                                       edge_type,
                                       weight_type,
@@ -570,21 +561,8 @@ extern "C" cugraph_error_code_t cugraph_graph_create_mg(
     }
 
     *graph = reinterpret_cast<cugraph_graph_t*>(functor.result_);
-  } catch (rmm::out_of_memory const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (rmm::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::exception const& ex) {
-    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
-    return CUGRAPH_UNKNOWN_ERROR;
-  }
-
-  return CUGRAPH_SUCCESS;
+    return CUGRAPH_SUCCESS;
+  }, error);
 }
 
 extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
@@ -707,7 +685,7 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
 
   cugraph_data_type_id_t edge_type{vertex_type};
   cugraph_data_type_id_t edge_type_id_type{cugraph_data_type_id_t::NTYPES};
-  try {
+  auto const validation_status = cugraph::c_api::run_with_error_boundary([&]() {
     size_t num_edges = cugraph::host_scalar_allreduce(p_handle->handle_->get_comms(),
                                                       local_num_edges,
                                                       raft::comms::op_t::SUM,
@@ -831,19 +809,9 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
     if (edge_type_id_type == cugraph_data_type_id_t::NTYPES) {
       edge_type_id_type = cugraph_data_type_id_t::INT32;
     }
-  } catch (rmm::out_of_memory const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (rmm::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::exception const& ex) {
-    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
-    return CUGRAPH_UNKNOWN_ERROR;
-  }
+    return CUGRAPH_SUCCESS;
+  }, error);
+  if (validation_status != CUGRAPH_SUCCESS) { return validation_status; }
 
   //
   // Now we know enough to create the graph
@@ -864,7 +832,7 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
                                symmetrize,
                                do_expensive_check);
 
-  try {
+  return cugraph::c_api::run_with_error_boundary([&]() {
     cugraph::c_api::vertex_dispatcher(vertex_type,
                                       edge_type,
                                       weight_type,
@@ -880,19 +848,6 @@ extern "C" cugraph_error_code_t cugraph_graph_create_with_times_mg(
     }
 
     *graph = reinterpret_cast<cugraph_graph_t*>(functor.result_);
-  } catch (rmm::out_of_memory const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_OUT_OF_MEMORY);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (rmm::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_RMM_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::bad_alloc const& ex) {
-    *error = cugraph::c_api::make_allocation_error(ex.what(), CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC);
-    return CUGRAPH_ALLOC_ERROR;
-  } catch (std::exception const& ex) {
-    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{ex.what()});
-    return CUGRAPH_UNKNOWN_ERROR;
-  }
-
-  return CUGRAPH_SUCCESS;
+    return CUGRAPH_SUCCESS;
+  }, error);
 }

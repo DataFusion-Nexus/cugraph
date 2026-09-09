@@ -30,6 +30,20 @@ typedef enum cugraph_allocation_source_ {
   CUGRAPH_ALLOCATION_SOURCE_STD_BAD_ALLOC
 } cugraph_allocation_source_t;
 
+/**
+ * @brief Provenance of an allocation failure, when the allocation owner can
+ *        distinguish a logical reservation limit from physical device memory
+ *        pressure.
+ *
+ * This is intentionally separate from `cugraph_allocation_source_t`, which
+ * records the C++ exception type caught at the boundary.
+ */
+typedef enum cugraph_error_failure_source_ {
+  CUGRAPH_ERROR_FAILURE_SOURCE_PHYSICAL          = 0,
+  CUGRAPH_ERROR_FAILURE_SOURCE_RESERVATION_LIMIT = 1,
+  CUGRAPH_ERROR_FAILURE_SOURCE_UNKNOWN           = 2
+} cugraph_error_failure_source_t;
+
 typedef struct cugraph_error_ {
   int32_t align_;
 } cugraph_error_t;
@@ -43,6 +57,14 @@ typedef struct cugraph_error_ {
 CUGRAPH_EXPORT const char* cugraph_error_message(const cugraph_error_t* error);
 CUGRAPH_EXPORT cugraph_allocation_source_t cugraph_error_allocation_source(
   const cugraph_error_t* error);
+CUGRAPH_EXPORT cugraph_error_failure_source_t cugraph_error_failure_source(
+  const cugraph_error_t* error);
+CUGRAPH_EXPORT uint64_t cugraph_error_domain_id(const cugraph_error_t* error);
+CUGRAPH_EXPORT uint64_t cugraph_error_member_id(const cugraph_error_t* error);
+CUGRAPH_EXPORT uint64_t cugraph_error_generation(const cugraph_error_t* error);
+CUGRAPH_EXPORT uint64_t cugraph_error_requested_bytes(const cugraph_error_t* error);
+CUGRAPH_EXPORT uint64_t cugraph_error_alignment(const cugraph_error_t* error);
+CUGRAPH_EXPORT int32_t cugraph_error_cuda_error(const cugraph_error_t* error);
 
 /**
  * @brief    Destroy an error message
