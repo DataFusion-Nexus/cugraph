@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cugraph/algorithms.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/edge_src_dst_property.hpp>
 #include <cugraph/graph_functions.hpp>
 #include <cugraph/graph_view.hpp>
@@ -519,7 +520,7 @@ rmm::device_uvector<weight_t> od_shortest_distances(
 
   size_t constexpr num_far_buffers{5};
 
-  auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+  auto total_global_mem = cugraph::detail::effective_device_memory(handle);
 
   size_t key_buffer_capacity_increment = origins.size() * size_t{1024};
   size_t init_far_buffer_size          = origins.size() * size_t{1024};

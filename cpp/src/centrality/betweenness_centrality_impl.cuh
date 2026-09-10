@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cugraph/algorithms.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/detail/utility_wrappers.hpp>
 #include <cugraph/edge_src_dst_property.hpp>
 #include <cugraph/prims/count_if_v.cuh>
@@ -571,13 +572,17 @@ batch_partition_frontier(raft::handle_t const& handle,
       });
     auto max_pushes = thrust::reduce(
       handle.get_thrust_policy(), source_out_edge_counts.begin(), source_out_edge_counts.end());
-    auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+    auto total_global_mem = cugraph::detail::effective_device_memory(handle);
     auto constexpr max_edge_tuple_data_ratio =
       0.25;  // limit max_sources_per_batch so that the edge tuple data should not exceed
              // max_edge_tuple_data_ratio of total_global_mem
+    // A small memory budget can truncate this ratio to zero, and the batch
+    // count below divides by it. One push per batch is the smallest unit that
+    // still makes progress.
     auto max_pushes_per_batch =
-      static_cast<size_t>((total_global_mem * max_edge_tuple_data_ratio) /
-                          (sizeof(vertex_t) + sizeof(origin_t) + sizeof(edge_t)));
+      std::max(static_cast<size_t>((total_global_mem * max_edge_tuple_data_ratio) /
+                                   (sizeof(vertex_t) + sizeof(origin_t) + sizeof(edge_t))),
+               size_t{1});
     if (max_pushes > max_pushes_per_batch) {
       size_t num_batches   = (max_pushes + max_pushes_per_batch - 1) / max_pushes_per_batch;
       max_pushes_per_batch = (max_pushes + num_batches - 1) / num_batches;
@@ -1384,7 +1389,7 @@ rmm::device_uvector<weight_t> betweenness_centrality(
     size_t max_sources_per_batch =
       std::min(static_cast<size_t>(std::numeric_limits<uint16_t>::max()), num_sources);
     if (max_sources_per_batch > 1) {
-      auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+      auto total_global_mem = cugraph::detail::effective_device_memory(handle);
       auto constexpr max_multisource_bfs_result_ratio =
         0.25;  // limit max_sources_per_batch so that the return value of multisource_bfs should not
                // exceed max_multisource_bfs_result_ratio of total_global_mem

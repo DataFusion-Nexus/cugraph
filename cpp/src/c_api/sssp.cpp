@@ -17,21 +17,7 @@
 #include <cugraph/detail/utility_wrappers.hpp>
 #include <cugraph/graph_functions.hpp>
 
-#include <cstdint>
-#include <limits>
 #include <optional>
-
-namespace {
-
-cugraph_error_code_t fail(cugraph_error_t** error, cugraph_error_code_t code, char const* message)
-{
-  if (error != nullptr) {
-    *error = reinterpret_cast<cugraph_error_t*>(new cugraph::c_api::cugraph_error_t{message});
-  }
-  return code;
-}
-
-}  // namespace
 
 namespace cugraph {
 namespace c_api {
@@ -158,33 +144,6 @@ struct sssp_functor : public abstract_functor {
 
 }  // namespace c_api
 }  // namespace cugraph
-
-extern "C" cugraph_error_code_t cugraph_sssp_workspace_preflight(size_t edge_count,
-                                                                 cugraph_data_type_id_t weight_type,
-                                                                 bool_t has_edge_weights,
-                                                                 size_t* unit_weight_bytes_out,
-                                                                 cugraph_error_t** error)
-{
-  if (error != nullptr) { *error = nullptr; }
-  if (unit_weight_bytes_out != nullptr) { *unit_weight_bytes_out = 0; }
-  if (error == nullptr || unit_weight_bytes_out == nullptr) { return CUGRAPH_INVALID_INPUT; }
-  if (has_edge_weights != FALSE && has_edge_weights != TRUE) {
-    return fail(error, CUGRAPH_INVALID_INPUT, "has_edge_weights must be FALSE or TRUE");
-  }
-  if (weight_type != FLOAT32 && weight_type != FLOAT64) {
-    return fail(error,
-                CUGRAPH_UNSUPPORTED_TYPE_COMBINATION,
-                "SSSP graph weight type must be FLOAT32 or FLOAT64");
-  }
-  if (has_edge_weights == TRUE) { return CUGRAPH_SUCCESS; }
-
-  auto const width = weight_type == FLOAT32 ? sizeof(std::int32_t) : sizeof(std::int64_t);
-  if (edge_count > std::numeric_limits<size_t>::max() / width) {
-    return fail(error, CUGRAPH_INVALID_INPUT, "SSSP unit-weight byte count overflows size_t");
-  }
-  *unit_weight_bytes_out = edge_count * width;
-  return CUGRAPH_SUCCESS;
-}
 
 extern "C" cugraph_error_code_t cugraph_sssp(const cugraph_resource_handle_t* handle,
                                              cugraph_graph_t* graph,

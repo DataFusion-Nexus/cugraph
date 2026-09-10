@@ -7,6 +7,7 @@
 #include "structure/detail/structure_utils.cuh"
 
 #include <cugraph/detail/utility_wrappers.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/utilities/dataframe_buffer.hpp>
 #include <cugraph/utilities/device_functors.cuh>
 #include <cugraph/utilities/groupby_and_count.cuh>
@@ -423,7 +424,7 @@ remove_multi_edges_impl(
 
   auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
   if (!large_buffer_type) {
-    auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+    auto total_global_mem = cugraph::detail::effective_device_memory(handle);
     auto constexpr mem_frugal_ratio =
       0.5;  // if the aggregate edge data size exceeds the mem_frugal_ratio of the total global_mem
             // (in an approximate sense), switch to the memory frugal approach

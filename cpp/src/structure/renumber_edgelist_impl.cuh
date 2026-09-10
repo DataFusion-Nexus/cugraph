@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cugraph/graph_functions.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/graph_view.hpp>
 #include <cugraph/prims/kv_store.cuh>
 #include <cugraph/utilities/device_comm.hpp>
@@ -448,7 +449,7 @@ compute_renumber_map(raft::handle_t const& handle,
     {
       auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
       if (!large_edge_buffer_type) {
-        auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+        auto total_global_mem = cugraph::detail::effective_device_memory(handle);
         auto constexpr mem_frugal_ratio =
           0.03;  // if expected temporary buffer size exceeds the mem_Frugal_ratio of the
                  // total_global_mem, switch to the memory frugal approach
@@ -508,7 +509,7 @@ compute_renumber_map(raft::handle_t const& handle,
     {
       auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
       if (!large_edge_buffer_type) {
-        auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+        auto total_global_mem = cugraph::detail::effective_device_memory(handle);
         auto constexpr mem_frugal_ratio =
           0.03;  // if expected temporary buffer size exceeds the mem_Frugal_ratio of the
                  // total_global_mem, switch to the memory frugal approach

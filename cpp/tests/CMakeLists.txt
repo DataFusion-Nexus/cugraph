@@ -385,22 +385,6 @@ ConfigureTest(REMOVE_MULTI_EDGES_TEST structure/remove_multi_edges_test.cpp)
 
 ###################################################################################################
 # - Symmetrize tests ------------------------------------------------------------------------------
-if(BUILD_CUGRAPH_EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION)
-    ConfigureTest(EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION_TEST
-                  structure/edgelist_sort_workspace_preflight_test.cu
-                  GPUS 1
-                  PERCENT 100)
-    target_include_directories(EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION_TEST
-        PRIVATE
-            "${CUGRAPH_SOURCE_DIR}/src")
-    target_link_libraries(EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION_TEST
-        PRIVATE
-            cugraph::cugraph_c)
-    add_dependencies(EDGELIST_SORT_WORKSPACE_PREFLIGHT_CALIBRATION_TEST generate_ctest_json)
-endif()
-
-###################################################################################################
-# - Symmetrize tests ------------------------------------------------------------------------------
 ConfigureTest(SYMMETRIZE_TEST structure/symmetrize_test.cpp)
 
 ###################################################################################################
@@ -945,9 +929,8 @@ target_link_libraries(ERROR_CONTRACT_TEST PRIVATE cugraph::cugraph)
 ConfigureCTest(RESULT_CONSTRUCTION_TEST c_api/result_construction_test.cpp)
 target_include_directories(RESULT_CONSTRUCTION_TEST PRIVATE "${CUGRAPH_SOURCE_DIR}/src")
 target_link_libraries(RESULT_CONSTRUCTION_TEST PRIVATE cugraph::cugraph)
-ConfigureCTest(SIDE_INPUT_WORKSPACE_PREFLIGHT_TEST c_api/side_input_workspace_preflight_test.cu)
-target_include_directories(SIDE_INPUT_WORKSPACE_PREFLIGHT_TEST PRIVATE "${CUGRAPH_SOURCE_DIR}/src")
-target_link_libraries(SIDE_INPUT_WORKSPACE_PREFLIGHT_TEST PRIVATE cugraph::cugraph)
+ConfigureCTest(EFFECTIVE_DEVICE_MEMORY_TEST detail/effective_device_memory_test.cpp)
+target_link_libraries(EFFECTIVE_DEVICE_MEMORY_TEST PRIVATE cugraph::cugraph)
 ConfigureCTest(CAPI_KATZ_TEST c_api/katz_test.c)
 ConfigureCTest(CAPI_EIGENVECTOR_CENTRALITY_TEST c_api/eigenvector_centrality_test.c)
 ConfigureCTest(CAPI_BETWEENNESS_CENTRALITY_TEST c_api/betweenness_centrality_test.c)

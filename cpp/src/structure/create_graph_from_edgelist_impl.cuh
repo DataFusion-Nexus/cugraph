@@ -9,6 +9,7 @@
 #include "structure/detail/structure_utils.cuh"
 
 #include <cugraph/arithmetic_variant_types.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/detail/utility_wrappers.hpp>
 #include <cugraph/graph.hpp>
 #include <cugraph/graph_functions.hpp>
@@ -538,7 +539,7 @@ create_graph_from_partitioned_edgelist(
 
   auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
   if (!large_edge_buffer_type) {
-    auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+    auto total_global_mem = cugraph::detail::effective_device_memory(handle);
     auto constexpr mem_frugal_ratio =
       0.5;  // if the aggregate edge data size exceeds the mem_frugal_ratio of the total_global_mem
             // (in an approximate sense), switch to the memory frugal approach
@@ -1072,7 +1073,7 @@ create_graph_from_edgelist_impl(
 
     bool compress{false};
     if (!large_edge_buffer_type) {
-      auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+      auto total_global_mem = cugraph::detail::effective_device_memory(handle);
       size_t element_size   = std::transform_reduce(
         edgelist_edge_properties.begin(),
         edgelist_edge_properties.end(),
@@ -1537,7 +1538,7 @@ create_graph_from_edgelist_impl(raft::handle_t const& handle,
 
   auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
   if (!large_edge_buffer_type) {
-    auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+    auto total_global_mem = cugraph::detail::effective_device_memory(handle);
     auto constexpr mem_frugal_ratio =
       0.25;  // if the expected temporary buffer size exceeds the mem_frugal_ratio of the
              // total_global_mem, switch to the memory frugal approach

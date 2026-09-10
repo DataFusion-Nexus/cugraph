@@ -8,6 +8,7 @@
 #include "detail/shuffle_wrappers.hpp"
 
 #include <cugraph/detail/utility_wrappers.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/graph_functions.hpp>
 #include <cugraph/large_buffer_manager.hpp>
 #include <cugraph/partition_manager.hpp>
@@ -98,7 +99,7 @@ shuffle_vertex_pairs_with_values_by_gpu_id_impl(
 
   auto mem_frugal_threshold = std::numeric_limits<size_t>::max();
   if (!large_buffer_type) {
-    auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+    auto total_global_mem = cugraph::detail::effective_device_memory(handle);
     auto constexpr mem_frugal_ratio =
       0.05;  // if the expected temporary buffer size exceeds the mem_frugal_ratio of the
              // total_global_mem, switch to the memory frugal approach (thrust::sort is used to

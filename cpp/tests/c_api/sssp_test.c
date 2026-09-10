@@ -256,12 +256,6 @@ int test_unweighted_sssp()
                                                        &ret_error);
   TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "unweighted graph creation failed.");
 
-  size_t unit_weight_bytes = 0;
-  ret_code = cugraph_sssp_workspace_preflight(3, FLOAT32, FALSE, &unit_weight_bytes, &ret_error);
-  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "SSSP preflight failed.");
-  TEST_ASSERT(
-    test_ret_value, unit_weight_bytes == 3 * sizeof(float), "SSSP preflight byte count mismatch.");
-
   ret_code = cugraph_sssp(handle, graph, 0, FLT_MAX, TRUE, FALSE, &result, &ret_error);
   TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "unweighted cugraph_sssp failed.");
 
@@ -291,43 +285,6 @@ int test_unweighted_sssp()
   return test_ret_value;
 }
 
-int test_sssp_workspace_preflight_rejects_overflow()
-{
-  int test_ret_value       = 0;
-  size_t unit_weight_bytes = 0;
-  cugraph_error_t* error   = NULL;
-  cugraph_error_code_t ret_code =
-    cugraph_sssp_workspace_preflight(SIZE_MAX, FLOAT64, FALSE, &unit_weight_bytes, &error);
-  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_INVALID_INPUT, "overflow must fail closed.");
-  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "failed preflight must clear output.");
-  cugraph_error_free(error);
-  return test_ret_value;
-}
-
-int test_sssp_workspace_preflight_boundaries()
-{
-  int test_ret_value       = 0;
-  size_t unit_weight_bytes = SIZE_MAX;
-  cugraph_error_t* error   = NULL;
-  cugraph_error_code_t ret_code =
-    cugraph_sssp_workspace_preflight(0, FLOAT32, FALSE, &unit_weight_bytes, &error);
-  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "zero-edge preflight failed.");
-  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "zero-edge preflight must return zero.");
-
-  ret_code = cugraph_sssp_workspace_preflight(3, FLOAT64, TRUE, &unit_weight_bytes, &error);
-  TEST_ASSERT(test_ret_value, ret_code == CUGRAPH_SUCCESS, "weighted preflight failed.");
-  TEST_ASSERT(
-    test_ret_value, unit_weight_bytes == 0, "weighted preflight must borrow graph weights.");
-
-  ret_code = cugraph_sssp_workspace_preflight(3, INT32, FALSE, &unit_weight_bytes, &error);
-  TEST_ASSERT(test_ret_value,
-              ret_code == CUGRAPH_UNSUPPORTED_TYPE_COMBINATION,
-              "unsupported weight dtype must fail closed.");
-  TEST_ASSERT(test_ret_value, unit_weight_bytes == 0, "failed preflight must clear output.");
-  cugraph_error_free(error);
-  return test_ret_value;
-}
-
 /******************************************************************************/
 
 int main(int argc, char** argv)
@@ -337,7 +294,5 @@ int main(int argc, char** argv)
   result |= RUN_TEST(test_sssp_with_transpose);
   result |= RUN_TEST(test_sssp_with_transpose_double);
   result |= RUN_TEST(test_unweighted_sssp);
-  result |= RUN_TEST(test_sssp_workspace_preflight_rejects_overflow);
-  result |= RUN_TEST(test_sssp_workspace_preflight_boundaries);
   return result;
 }

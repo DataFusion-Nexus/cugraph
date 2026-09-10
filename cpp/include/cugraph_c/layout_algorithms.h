@@ -131,24 +131,6 @@ cugraph_force_atlas2(const cugraph_resource_handle_t* handle,
                      cugraph_error_t** error);
 
 /**
- * @brief Query the device-memory peak used to copy and reorder ForceAtlas2 side inputs.
- *
- * This host-only query follows the single-GPU ForceAtlas2 side-input dispatch
- * and does not access a CUDA device.
- */
-CUGRAPH_EXPORT cugraph_error_code_t cugraph_force_atlas2_side_input_workspace_preflight(
-  cugraph_data_type_id_t vertex_type,
-  bool_t has_initial_positions,
-  size_t initial_position_rows,
-  bool_t has_radius,
-  bool_t has_mobility,
-  bool_t has_mass,
-  size_t vertex_attribute_rows,
-  size_t* copy_bytes_out,
-  size_t* workspace_bytes_out,
-  cugraph_error_t** error);
-
-/**
  * @brief     Get layout vertices
  */
 CUGRAPH_EXPORT cugraph_type_erased_device_array_view_t* cugraph_layout_result_get_vertices(

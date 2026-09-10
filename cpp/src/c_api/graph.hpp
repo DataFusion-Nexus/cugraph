@@ -71,54 +71,61 @@ cugraph_error_code_t transpose_storage(raft::handle_t const& handle,
                                        cugraph_error_t* error)
 {
   if (store_transposed == graph->store_transposed_) {
-    if ((graph->edge_ids_ != nullptr) || (graph->edge_types_ != nullptr)) {
+    if ((graph->edge_ids_ != nullptr) || (graph->edge_types_ != nullptr) ||
+        (graph->edge_start_times_ != nullptr) || (graph->edge_end_times_ != nullptr)) {
       error->error_message_ =
-        "transpose failed, transposing a graph with edge ID, type pairs unimplemented.";
+        "transpose failed, transposing a graph with edge ID, type, or time properties is unimplemented.";
       return CUGRAPH_NOT_IMPLEMENTED;
     }
 
-    auto p_graph =
-      reinterpret_cast<cugraph::graph_t<vertex_t, edge_t, store_transposed, multi_gpu>*>(
-        graph->graph_);
+    using graph_type = cugraph::graph_t<vertex_t, edge_t, store_transposed, multi_gpu>;
+    using transposed_graph_type =
+      cugraph::graph_t<vertex_t, edge_t, !store_transposed, multi_gpu>;
+    using weight_property_type = edge_property_t<edge_t, weight_t>;
 
-    auto number_map = reinterpret_cast<rmm::device_uvector<vertex_t>*>(graph->number_map_);
+    auto old_graph = std::unique_ptr<graph_type>(reinterpret_cast<graph_type*>(graph->graph_));
+    auto old_number_map = std::unique_ptr<rmm::device_uvector<vertex_t>>(
+      reinterpret_cast<rmm::device_uvector<vertex_t>*>(graph->number_map_));
+    auto old_edge_weights = std::unique_ptr<weight_property_type>(
+      reinterpret_cast<weight_property_type*>(graph->edge_weights_));
 
-    auto optional_edge_weights = std::optional<edge_property_t<edge_t, weight_t>>(std::nullopt);
+    try {
+      auto optional_edge_weights = std::optional<weight_property_type>(std::nullopt);
+      if (old_edge_weights) {
+        optional_edge_weights = std::make_optional(std::move(*old_edge_weights));
+      }
 
-    if (graph->edge_weights_ != nullptr) {
-      auto edge_weights =
-        reinterpret_cast<edge_property_t<edge_t, weight_t>*>(graph->edge_weights_);
-      optional_edge_weights = std::make_optional(std::move(*edge_weights));
-      delete edge_weights;
+      auto new_graph = std::make_unique<transposed_graph_type>(handle);
+      std::optional<rmm::device_uvector<vertex_t>> new_number_map{std::nullopt};
+      auto new_optional_edge_weights = std::optional<weight_property_type>(std::nullopt);
+
+      std::tie(*new_graph, new_optional_edge_weights, new_number_map) =
+        cugraph::transpose_graph_storage(
+          handle,
+          std::move(*old_graph),
+          std::move(optional_edge_weights),
+          std::make_optional<rmm::device_uvector<vertex_t>>(std::move(*old_number_map)));
+
+      auto committed_number_map =
+        std::make_unique<rmm::device_uvector<vertex_t>>(std::move(new_number_map.value()));
+      std::unique_ptr<weight_property_type> committed_edge_weights{};
+      if (new_optional_edge_weights) {
+        committed_edge_weights =
+          std::make_unique<weight_property_type>(std::move(new_optional_edge_weights.value()));
+      }
+
+      graph->graph_            = new_graph.release();
+      graph->number_map_       = committed_number_map.release();
+      graph->edge_weights_     = committed_edge_weights.release();
+      graph->store_transposed_ = !store_transposed;
+    } catch (...) {
+      // Restore ownership to the C handle so its normal destructor remains
+      // safe even when one of the moved-from native values is unusable.
+      old_graph.release();
+      old_number_map.release();
+      old_edge_weights.release();
+      throw;
     }
-
-    auto graph_transposed =
-      new cugraph::graph_t<vertex_t, edge_t, !store_transposed, multi_gpu>(handle);
-
-    std::optional<rmm::device_uvector<vertex_t>> new_number_map{std::nullopt};
-
-    auto new_optional_edge_weights = std::optional<edge_property_t<edge_t, weight_t>>(std::nullopt);
-
-    std::tie(*graph_transposed, new_optional_edge_weights, new_number_map) =
-      cugraph::transpose_graph_storage(
-        handle,
-        std::move(*p_graph),
-        std::move(optional_edge_weights),
-        std::make_optional<rmm::device_uvector<vertex_t>>(std::move(*number_map)));
-
-    *number_map = std::move(new_number_map.value());
-
-    delete p_graph;
-
-    if (new_optional_edge_weights) {
-      auto new_edge_weights = new cugraph::edge_property_t<edge_t, weight_t>(handle);
-
-      *new_edge_weights    = std::move(new_optional_edge_weights.value());
-      graph->edge_weights_ = new_edge_weights;
-    }
-
-    graph->graph_            = graph_transposed;
-    graph->store_transposed_ = !store_transposed;
 
     return CUGRAPH_SUCCESS;
   } else {

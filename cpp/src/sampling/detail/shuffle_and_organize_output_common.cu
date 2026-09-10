@@ -4,6 +4,7 @@
  */
 
 #include <cugraph/arithmetic_variant_types.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/detail/utility_wrappers.hpp>
 #include <cugraph/export.hpp>
 #include <cugraph/shuffle_functions.hpp>
@@ -52,7 +53,7 @@ shuffle_and_organize_output(
 
       auto comm_size = handle.get_comms().get_size();
       size_t element_size{sizeof(int32_t) + sizeof(size_t)};
-      auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+      auto total_global_mem = cugraph::detail::effective_device_memory(handle);
       auto constexpr mem_frugal_ratio =
         0.1;  // if the expected temporary buffer size exceeds the mem_frugal_ratio of the
               // total_global_mem, switch to the memory frugal approach (thrust::sort is used to

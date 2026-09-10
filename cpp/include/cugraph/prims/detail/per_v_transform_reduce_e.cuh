@@ -8,6 +8,7 @@
 #include <cugraph/edge_partition_edge_property_device_view.cuh>
 #include <cugraph/edge_partition_endpoint_property_device_view.cuh>
 #include <cugraph/edge_src_dst_property.hpp>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/export.hpp>
 #include <cugraph/graph_view.hpp>
 #include <cugraph/host_staging_buffer_manager.hpp>
@@ -1529,7 +1530,7 @@ void per_v_transform_reduce_e(raft::handle_t const& handle,
     auto const minor_comm_size = minor_comm.get_size();
 
     auto max_tmp_buffer_size =
-      static_cast<size_t>(static_cast<double>(handle.get_device_properties().totalGlobalMem) * 0.2);
+      static_cast<size_t>(static_cast<double>(cugraph::detail::effective_device_memory(handle)) * 0.2);
     size_t approx_tmp_buffer_size_per_loop{0};
     if constexpr (update_major) {
       size_t key_size{0};

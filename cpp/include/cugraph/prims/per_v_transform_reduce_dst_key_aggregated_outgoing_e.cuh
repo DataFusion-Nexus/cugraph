@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cugraph/detail/decompress_edge_partition.cuh>
+#include <cugraph/detail/effective_device_memory.hpp>
 #include <cugraph/edge_partition_device_view.cuh>
 #include <cugraph/edge_partition_endpoint_property_device_view.cuh>
 #include <cugraph/edge_src_dst_property.hpp>
@@ -310,7 +311,7 @@ void per_v_transform_reduce_dst_key_aggregated_outgoing_e(
   if (do_expensive_check) { /* currently, nothing to do */
   }
 
-  auto total_global_mem = handle.get_device_properties().totalGlobalMem;
+  auto total_global_mem = cugraph::detail::effective_device_memory(handle);
   size_t element_size   = sizeof(vertex_t) * 2;  // major + minor keys
   if constexpr (!std::is_same_v<edge_value_t, cuda::std::nullopt_t>) {
     static_assert(is_arithmetic_or_thrust_tuple_of_arithmetic<edge_value_t>::value);
