@@ -1179,12 +1179,18 @@ void multisource_backward_pass(
 
         // Work directly with the result buffer
         if (srcs.size() > 0) {
-          // Step 3: Sort using (src, source_index) as composite key for efficient reduction
-          thrust::stable_sort_by_key(
+          // Step 3: Sort the (src, source_index, delta) triplets. Frontier
+          // extraction assigns output slots with warp-level atomics, so the
+          // input order varies run to run; sorting by the (src, source_index)
+          // key pair alone would leave a nondeterministic residual order that
+          // reduce_by_key then adds up in varying order. Sorting the triplets
+          // fixes the value order inside each reduction group. Any residual
+          // permutation is limited to bitwise-identical triplets, whose sum is
+          // order-independent.
+          thrust::sort(
             handle.get_thrust_policy(),
-            thrust::make_zip_iterator(srcs.begin(), source_indices.begin()),  // Composite key
-            thrust::make_zip_iterator(srcs.end(), source_indices.end()),
-            deltas.begin());  // Values to sort
+            thrust::make_zip_iterator(srcs.begin(), source_indices.begin(), deltas.begin()),
+            thrust::make_zip_iterator(srcs.end(), source_indices.end(), deltas.end()));
 
           // Step 4: Use reduce_by_key with in-place reduction
           // Reduce by key and get count in one operation - overwrite input buffers
@@ -1200,7 +1206,12 @@ void multisource_backward_pass(
             cuda::std::plus<weight_t>{});
           size_t num_reduced = cuda::std::distance(deltas.begin(), reduced_result.second);
 
-          // Step 5: Update centralities and deltas from the in-place reduced results
+          // Step 5: Update per-source deltas from the in-place reduced results for
+          // the next (nearer) distance level. Each (src, source_index) pair is
+          // reduced to a single entry, so each delta slot has one writer. The
+          // shared centralities are folded deterministically after all distance
+          // levels complete (see below), never with per-hop atomics whose
+          // completion order varies run to run.
           thrust::for_each(
             handle.get_thrust_policy(),
             thrust::make_counting_iterator<size_t>(0),
@@ -1208,7 +1219,6 @@ void multisource_backward_pass(
             [srcs           = srcs.data(),
              source_indices = source_indices.data(),
              deltas         = deltas.data(),
-             centralities   = centralities.data(),
              delta_buffer   = delta_buffer.data(),
              local_vertex_partition_range_size,
              v_first = graph_view.local_vertex_partition_range_first()] __device__(size_t i) {
@@ -1216,13 +1226,8 @@ void multisource_backward_pass(
               auto source_idx = source_indices[i];
               auto delta      = deltas[i];
 
-              // Update centrality using atomic for floating point
-              auto src_offset = src - v_first;
-              cuda::atomic_ref<weight_t, cuda::thread_scope_device> centrality_counter(
-                centralities[src_offset]);
-              centrality_counter.fetch_add(delta, cuda::std::memory_order_relaxed);
-
               // Accumulate delta for next iteration using atomic for floating point
+              auto src_offset = src - v_first;
               weight_t* source_deltas =
                 delta_buffer + source_idx * local_vertex_partition_range_size;
               cuda::atomic_ref<weight_t, cuda::thread_scope_device> delta_counter(
@@ -1234,6 +1239,28 @@ void multisource_backward_pass(
     }
   }
 
+  // Fold this batch's per-source deltas into the shared centralities in fixed
+  // source-index order: one thread per vertex walks its batch sources
+  // sequentially. This replaces the per-hop relaxed atomic adds whose
+  // completion order varied run to run. Batches cover consecutive global source
+  // ranges processed in order, so the accumulation order is the global source
+  // order regardless of batch sizing (and therefore regardless of the
+  // device-memory cap that sizes the batches).
+  thrust::for_each(
+    handle.get_thrust_policy(),
+    thrust::make_counting_iterator<size_t>(0),
+    thrust::make_counting_iterator<size_t>(local_vertex_partition_range_size),
+    [centralities = centralities.data(),
+     delta_buffer = delta_buffer.data(),
+     local_vertex_partition_range_size,
+     num_sources] __device__(size_t v_offset) {
+      weight_t sum = centralities[v_offset];
+      for (size_t source_idx = 0; source_idx < num_sources; ++source_idx) {
+        sum += delta_buffer[source_idx * local_vertex_partition_range_size + v_offset];
+      }
+      centralities[v_offset] = sum;
+    });
+
   // Handle source and destination vertex contributions if include_endpoints is true
   if (include_endpoints) {
     auto v_first = graph_view.local_vertex_partition_range_first();
@@ -1242,60 +1269,47 @@ void multisource_backward_pass(
     rmm::device_uvector<vertex_t> sources_buffer(num_sources, handle.get_stream());
     thrust::copy(handle.get_thrust_policy(), sources_first, sources_last, sources_buffer.begin());
 
-    // Handle source vertex contributions
+    // Deterministic endpoint contributions: one thread per vertex walks the
+    // batch sources in index order, replacing the relaxed atomic adds whose
+    // completion order varied run to run. The per-source arithmetic is
+    // unchanged; only the cross-source accumulation order is fixed.
     thrust::for_each(
       handle.get_thrust_policy(),
       thrust::make_counting_iterator<size_t>(0),
-      thrust::make_counting_iterator<size_t>(num_sources),
+      thrust::make_counting_iterator<size_t>(local_vertex_partition_range_size),
       [distances_2d = distances_2d.data(),
-       sigmas_2d    = sigmas_2d.data(),
        sources      = sources_buffer.data(),
        centralities = centralities.data(),
        local_vertex_partition_range_size,
-       v_first] __device__(size_t source_idx) {
-        const vertex_t* distances = distances_2d + source_idx * local_vertex_partition_range_size;
-        const edge_t* sigmas      = sigmas_2d + source_idx * local_vertex_partition_range_size;
-        vertex_t source_vertex    = sources[source_idx];
+       num_sources,
+       invalid_distance,
+       v_first] __device__(size_t v_offset) {
+        weight_t endpoint_sum = weight_t{0};
+        for (size_t source_idx = 0; source_idx < num_sources; ++source_idx) {
+          const vertex_t* distances = distances_2d + source_idx * local_vertex_partition_range_size;
+          vertex_t source_vertex    = sources[source_idx];
 
-        // Source vertex contribution: count of reachable vertices (excluding self)
-        weight_t source_contribution = 0;
-        for (vertex_t v = 0; v < local_vertex_partition_range_size; ++v) {
-          if (v != source_vertex && distances[v] != std::numeric_limits<vertex_t>::max()) {
-            source_contribution += 1.0;
+          // Source vertex contribution: count of reachable vertices (excluding self).
+          // Only the source vertex's own slot accumulates this term.
+          if (static_cast<vertex_t>(v_offset) == source_vertex - v_first) {
+            weight_t source_contribution = 0;
+            for (size_t v = 0; v < local_vertex_partition_range_size; ++v) {
+              if (static_cast<vertex_t>(v) != source_vertex &&
+                  distances[v] != invalid_distance) {
+                source_contribution += 1.0;
+              }
+            }
+            endpoint_sum += source_contribution;
+          }
+
+          // Destination vertex contributions: each reachable vertex contributes 1
+          // to its own centrality.
+          if (static_cast<vertex_t>(v_offset) != source_vertex &&
+              distances[v_offset] != invalid_distance) {
+            endpoint_sum += 1.0;
           }
         }
-        // Convert global vertex ID to local offset
-        auto source_offset = source_vertex - v_first;
-        cuda::atomic_ref<weight_t, cuda::thread_scope_device> centrality_counter(
-          centralities[source_offset]);
-        centrality_counter.fetch_add(source_contribution, cuda::std::memory_order_relaxed);
-      });
-
-    // Handle destination vertex contributions
-    thrust::for_each(
-      handle.get_thrust_policy(),
-      thrust::make_counting_iterator<size_t>(0),
-      thrust::make_counting_iterator<size_t>(num_sources),
-      [distances_2d = distances_2d.data(),
-       sigmas_2d    = sigmas_2d.data(),
-       sources      = sources_buffer.data(),
-       centralities = centralities.data(),
-       local_vertex_partition_range_size,
-       v_first] __device__(size_t source_idx) {
-        const vertex_t* distances = distances_2d + source_idx * local_vertex_partition_range_size;
-        const edge_t* sigmas      = sigmas_2d + source_idx * local_vertex_partition_range_size;
-        vertex_t source_vertex    = sources[source_idx];
-
-        // Destination vertex contributions: each reachable vertex contributes to its own centrality
-        for (vertex_t v = 0; v < local_vertex_partition_range_size; ++v) {
-          if (v != source_vertex && distances[v] != std::numeric_limits<vertex_t>::max()) {
-            // Each destination vertex contributes 1 to its own centrality
-            auto dest_offset = v - v_first;
-            cuda::atomic_ref<weight_t, cuda::thread_scope_device> centrality_counter(
-              centralities[dest_offset]);
-            centrality_counter.fetch_add(1.0, cuda::std::memory_order_relaxed);
-          }
-        }
+        centralities[v_offset] += endpoint_sum;
       });
   }
 }
@@ -1410,9 +1424,9 @@ rmm::device_uvector<weight_t> betweenness_centrality(
     }
     size_t num_batches = (num_sources + max_sources_per_batch - 1) / max_sources_per_batch;
 
-    // Source batches accumulate into the shared centralities through atomics,
-    // so zero the output once up front. Zeroing per batch would discard every
-    // batch but the last.
+    // Source batches fold into the shared centralities in global source-index
+    // order (see multisource_backward_pass), so zero the output once up front.
+    // Zeroing per batch would discard every batch but the last.
     cugraph::fill(
       handle.get_thrust_policy(), centralities.begin(), centralities.end(), weight_t{0});
 
