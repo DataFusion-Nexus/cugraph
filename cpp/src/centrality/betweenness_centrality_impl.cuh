@@ -601,6 +601,15 @@ batch_partition_frontier(raft::handle_t const& handle,
                           count_first,
                           count_first + num_batches,
                           source_lasts->begin());
+      // `source_lasts` entries are exclusive batch-end boundaries interpreted
+      // with `upper_bound`, so an origin lands in batch `num_batches` (which
+      // the consumers never execute) whenever the final threshold lands
+      // exactly on the total push count. Pin the final boundary to the end so
+      // every origin stays inside an executed batch.
+      cugraph::fill(handle.get_thrust_policy(),
+                    source_lasts->end() - 1,
+                    source_lasts->end(),
+                    num_sources);
     }
   }
 
@@ -903,8 +912,6 @@ void multisource_backward_pass(
   CUGRAPH_EXPECTS(
     num_sources <= std::numeric_limits<origin_t>::max(),
     "Number of sources exceeds maximum value for origin_t (uint16_t), would cause overflow");
-
-  cugraph::fill(handle.get_thrust_policy(), centralities.begin(), centralities.end(), weight_t{0});
 
   rmm::device_uvector<weight_t> delta_buffer(num_sources * local_vertex_partition_range_size,
                                              handle.get_stream());
@@ -1402,6 +1409,12 @@ rmm::device_uvector<weight_t> betweenness_centrality(
                  size_t{1});
     }
     size_t num_batches = (num_sources + max_sources_per_batch - 1) / max_sources_per_batch;
+
+    // Source batches accumulate into the shared centralities through atomics,
+    // so zero the output once up front. Zeroing per batch would discard every
+    // batch but the last.
+    cugraph::fill(
+      handle.get_thrust_policy(), centralities.begin(), centralities.end(), weight_t{0});
 
     for (size_t batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
       size_t batch_start = batch_idx * max_sources_per_batch;
